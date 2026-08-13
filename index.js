@@ -1,36 +1,45 @@
 const TelegramBot = require('node-telegram-bot-api');
 const http = require('http');
+const fs = require('fs');
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const OWNER_ID = process.env.OWNER_ID;
 
-if (!BOT_TOKEN) {
-  throw new Error('BOT_TOKEN is not set');
-}
+if (!BOT_TOKEN) throw new Error('BOT_TOKEN is not set');
+if (!OWNER_ID) throw new Error('OWNER_ID is not set');
 
-if (!OPENROUTER_API_KEY) {
-  throw new Error('OPENROUTER_API_KEY is not set');
-}
-
-if (!OWNER_ID) {
-  throw new Error('OWNER_ID is not set');
-}
-
-const bot = new TelegramBot(BOT_TOKEN, {
-  polling: true
-});
+const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 
 let botUserId = null;
 let botUsername = null;
 
-// وضعیت ربات
-// true = فعال
-// false = خواب
+// هوش مصنوعی روشن/خاموش
+let aiEnabled = true;
+
+// ربات روشن/خواب
 let botAwake = true;
 
 // =========================
-// آماده‌سازی اطلاعات بات
+// بانک پاسخ‌های رایگان
+// =========================
+
+let answers = {};
+
+try {
+  answers = JSON.parse(
+    fs.readFileSync('./answers.json', 'utf8')
+  );
+
+  console.log(
+    `Loaded ${Object.keys(answers).length} free answers`
+  );
+} catch (error) {
+  console.error('answers.json error:', error.message);
+}
+
+// =========================
+// اطلاعات بات
 // =========================
 
 bot.getMe()
@@ -38,159 +47,207 @@ bot.getMe()
     botUserId = me.id;
     botUsername = me.username;
 
-    console.log(`Bot username: @${botUsername}`);
+    console.log(`Bot: @${botUsername}`);
     console.log('Telegram bot is running...');
   })
   .catch((error) => {
-    console.error('getMe error:', error);
+    console.error('getMe error:', error.message);
   });
 
 // =========================
-// OpenRouter AI
+// جواب رایگان
+// =========================
+
+function getFreeAnswer(text) {
+  const cleanText = text
+    .trim()
+    .toLowerCase();
+
+  if (answers[cleanText]) {
+    return answers[cleanText];
+  }
+
+  return null;
+}
+
+// =========================
+// هوش مصنوعی
 // =========================
 
 async function askAI(userMessage, userName, userRole) {
+
+  if (!OPENROUTER_API_KEY) {
+    return null;
+  }
+
   const prompt = `
-تو یک ربات تلگرامی فارسی‌زبان هستی.
+تو یک ربات فارسی‌زبان دوستانه هستی.
 
 نام کاربر: ${userName}
 نقش کاربر: ${userRole}
 
-به کاربر طبیعی، دوستانه، کوتاه و مفید پاسخ بده.
-اگر سؤال نامفهوم بود، درخواست توضیح کن.
+کوتاه، طبیعی و مفید پاسخ بده.
 
-پیام کاربر:
+پیام:
 ${userMessage}
 `;
 
-  const response = await fetch(
-    'https://openrouter.ai/api/v1/chat/completions',
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-        'HTTP-Referer': 'https://telegram-bot-1-0mtg.onrender.com',
-        'X-Title': 'Telegram Bot'
-      },
-      body: JSON.stringify({
-        model: 'openai/gpt-4o-mini',
-        messages: [
-          {
-            role: 'user',
-            content: prompt
-          }
-        ]
-      })
-    }
-  );
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(
-      `OpenRouter error: ${response.status} ${errorText}`
-    );
-  }
-
-  const data = await response.json();
-
-  return (
-    data.choices?.[0]?.message?.content ||
-    'متأسفم، فعلاً نتونستم جواب مناسبی پیدا کنم.'
-  );
-}
-
-// =========================
-// تشخیص نقش کاربر
-// =========================
-
-async function getUserRole(chatId, userId) {
   try {
-    const member = await bot.getChatMember(chatId, userId);
 
-    if (member.status === 'creator') {
-      return 'مالک گروه';
+    const response = await fetch(
+      'https://openrouter.ai/api/v1/chat/completions',
+      {
+        method: 'POST',
+
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization':
+            `Bearer ${OPENROUTER_API_KEY}`,
+          'HTTP-Referer':
+            'https://telegram-bot-1-0mtg.onrender.com',
+          'X-Title':
+            'Telegram Bot'
+        },
+
+        body: JSON.stringify({
+          model: 'openai/gpt-4o-mini',
+
+          messages: [
+            {
+              role: 'user',
+              content: prompt
+            }
+          ]
+        })
+      }
+    );
+
+    if (!response.ok) {
+      console.error(
+        'OpenRouter error:',
+        response.status
+      );
+
+      return null;
     }
 
-    if (member.status === 'administrator') {
-      return 'مدیر گروه';
-    }
+    const data = await response.json();
 
-    return 'عضو عادی';
+    return (
+      data.choices?.[0]?.message?.content ||
+      null
+    );
+
   } catch (error) {
-    console.error('getUserRole error:', error.message);
-    return 'عضو عادی';
+
+    console.error(
+      'AI error:',
+      error.message
+    );
+
+    return null;
   }
 }
 
 // =========================
-// بررسی مالک
+// تشخیص مالک
 // =========================
 
 async function isOwner(msg) {
-  const userId = String(msg.from.id);
 
-  // چت خصوصی: فقط OWNER_ID
+  if (!msg.from) return false;
+
+  // چت خصوصی
   if (msg.chat.type === 'private') {
-    return userId === String(OWNER_ID);
+    return (
+      String(msg.from.id) ===
+      String(OWNER_ID)
+    );
   }
 
-  // گروه: فقط Creator / مالک گروه
+  // گروه
   try {
-    const member = await bot.getChatMember(
-      msg.chat.id,
-      msg.from.id
-    );
+
+    const member =
+      await bot.getChatMember(
+        msg.chat.id,
+        msg.from.id
+      );
 
     return member.status === 'creator';
+
   } catch (error) {
-    console.error('Owner check error:', error.message);
+
+    console.error(
+      'Owner check error:',
+      error.message
+    );
+
     return false;
   }
 }
 
 // =========================
-// تشخیص دستور خواب / بیداری
+// دستورات
 // =========================
 
-function isSleepCommand(text) {
-  const commands = [
-    'خاموش شو',
-    'بخواب',
-    'ساکت شو',
-    'خاموش',
-    '/off'
-  ];
+function isCommand(text, list) {
 
-  return commands.includes(text.trim().toLowerCase());
+  const clean =
+    text.trim().toLowerCase();
+
+  return list.includes(clean);
 }
 
-function isWakeCommand(text) {
-  const commands = [
-    'زنده شو',
-    'بیدار شو',
-    'فعال شو',
-    'روشن شو',
-    'بیدار',
-    '/on'
-  ];
+const sleepCommands = [
+  'خاموش شو',
+  'بخواب',
+  'ساکت شو',
+  'خاموش',
+  '/off'
+];
 
-  return commands.includes(text.trim().toLowerCase());
-}
+const wakeCommands = [
+  'زنده شو',
+  'بیدار شو',
+  'فعال شو',
+  'روشن شو',
+  'بیدار',
+  '/on'
+];
+
+const aiOnCommands = [
+  'هوش مصنوعی روشن',
+  'هوش مصنوعی فعال',
+  '/ai_on'
+];
+
+const aiOffCommands = [
+  'هوش مصنوعی خاموش',
+  'هوش مصنوعی غیرفعال',
+  '/ai_off'
+];
 
 // =========================
 // پیام‌ها
 // =========================
 
 bot.on('message', async (msg) => {
+
   try {
+
     if (!msg.text || !msg.from) {
       return;
     }
 
-    const text = msg.text.trim();
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
+    const text =
+      msg.text.trim();
+
+    const chatId =
+      msg.chat.id;
+
+    const userId =
+      msg.from.id;
 
     const userName =
       msg.from.first_name ||
@@ -198,13 +255,12 @@ bot.on('message', async (msg) => {
       'کاربر';
 
     // =========================
-    // دستورهای مالک
+    // خاموش کردن ربات
     // =========================
 
-    if (isSleepCommand(text)) {
-      const owner = await isOwner(msg);
+    if (isCommand(text, sleepCommands)) {
 
-      if (!owner) {
+      if (!(await isOwner(msg))) {
         return;
       }
 
@@ -213,21 +269,20 @@ bot.on('message', async (msg) => {
       await bot.sendMessage(
         chatId,
         '🛑 چشم، مالک محترم!\n\n' +
-        'دستور شما دریافت شد و من وارد حالت سکوت شدم. 🤫\n\n' +
-        'هر وقت گفتید «زنده شو»، دوباره برمی‌گردم. ⚡🤖'
-      );
-
-      console.log(
-        `Bot put to sleep by owner: ${userId}`
+        'ربات وارد حالت سکوت شد. 🤫\n\n' +
+        'هر وقت گفتید «زنده شو»، دوباره فعال می‌شوم. ⚡🤖'
       );
 
       return;
     }
 
-    if (isWakeCommand(text)) {
-      const owner = await isOwner(msg);
+    // =========================
+    // روشن کردن ربات
+    // =========================
 
-      if (!owner) {
+    if (isCommand(text, wakeCommands)) {
+
+      if (!(await isOwner(msg))) {
         return;
       }
 
@@ -236,12 +291,45 @@ bot.on('message', async (msg) => {
       await bot.sendMessage(
         chatId,
         '🟢 به روی چشم، مالک محترم!\n\n' +
-        'از حالت خواب خارج شدم و دوباره آماده‌ام. 🤖✨\n' +
-        'بزن بریم!'
+        'از حالت خواب خارج شدم و دوباره آماده‌ام. 🤖✨'
       );
 
-      console.log(
-        `Bot awakened by owner: ${userId}`
+      return;
+    }
+
+    // =========================
+    // خاموش/روشن کردن AI
+    // =========================
+
+    if (isCommand(text, aiOffCommands)) {
+
+      if (!(await isOwner(msg))) {
+        return;
+      }
+
+      aiEnabled = false;
+
+      await bot.sendMessage(
+        chatId,
+        '🤖💤 هوش مصنوعی خاموش شد.\n\n' +
+        'از این لحظه فقط از پاسخ‌های رایگان استفاده می‌کنم. 📚'
+      );
+
+      return;
+    }
+
+    if (isCommand(text, aiOnCommands)) {
+
+      if (!(await isOwner(msg))) {
+        return;
+      }
+
+      aiEnabled = true;
+
+      await bot.sendMessage(
+        chatId,
+        '🧠⚡ هوش مصنوعی دوباره فعال شد!\n\n' +
+        'اگر پاسخ رایگان پیدا نشود، از AI کمک می‌گیرم. 🤖'
       );
 
       return;
@@ -262,101 +350,171 @@ bot.on('message', async (msg) => {
     let userRole = 'کاربر خصوصی';
 
     if (msg.chat.type !== 'private') {
-      userRole = await getUserRole(
-        chatId,
-        userId
-      );
-    }
 
-    console.log(
-      `Message from ${userName} - Role: ${userRole}`
-    );
+      try {
 
-    // =========================
-    // چت خصوصی
-    // =========================
+        const member =
+          await bot.getChatMember(
+            chatId,
+            userId
+          );
 
-    if (msg.chat.type === 'private') {
-      await bot.sendChatAction(
-        chatId,
-        'typing'
-      );
+        if (member.status === 'creator') {
+          userRole = 'مالک گروه';
+        } else if (
+          member.status === 'administrator'
+        ) {
+          userRole = 'مدیر گروه';
+        } else {
+          userRole = 'عضو عادی';
+        }
 
-      const answer = await askAI(
-        text,
-        userName,
-        userRole
-      );
+      } catch (error) {
 
-      await bot.sendMessage(
-        chatId,
-        answer
-      );
+        userRole = 'عضو عادی';
 
-      return;
+      }
     }
 
     // =========================
-    // گروه
+    // تشخیص پیام برای گروه
     // =========================
 
-    const mentioned =
-      botUsername &&
-      text
-        .toLowerCase()
-        .includes(`@${botUsername.toLowerCase()}`);
+    if (msg.chat.type !== 'private') {
 
-    const repliedToBot =
-      msg.reply_to_message &&
-      msg.reply_to_message.from &&
-      botUserId &&
-      msg.reply_to_message.from.id === botUserId;
+      const mentioned =
+        botUsername &&
+        text
+          .toLowerCase()
+          .includes(
+            `@${botUsername.toLowerCase()}`
+          );
 
-    // اگر نه منشن شده و نه روی بات ریپلای شده
-    if (!mentioned && !repliedToBot) {
-      return;
+      const repliedToBot =
+        msg.reply_to_message &&
+        msg.reply_to_message.from &&
+        botUserId &&
+        msg.reply_to_message.from.id ===
+          botUserId;
+
+      if (
+        !mentioned &&
+        !repliedToBot
+      ) {
+        return;
+      }
     }
 
-    // حذف منشن بات
+    // =========================
+    // حذف منشن
+    // =========================
+
     let userMessage = text;
 
     if (botUsername) {
-      userMessage = userMessage
-        .replace(
-          new RegExp(
-            `@${botUsername}`,
-            'ig'
-          ),
-          ''
-        )
-        .trim();
+
+      userMessage =
+        userMessage
+          .replace(
+            new RegExp(
+              `@${botUsername}`,
+              'ig'
+            ),
+            ''
+          )
+          .trim();
     }
 
     if (!userMessage) {
       userMessage = 'سلام';
     }
 
+    // =========================
+    // اول بانک رایگان
+    // =========================
+
+    const freeAnswer =
+      getFreeAnswer(userMessage);
+
+    if (freeAnswer) {
+
+      await bot.sendMessage(
+        chatId,
+        freeAnswer,
+        msg.chat.type !== 'private'
+          ? {
+              reply_to_message_id:
+                msg.message_id
+            }
+          : {}
+      );
+
+      return;
+    }
+
+    // =========================
+    // اگر AI خاموش است
+    // =========================
+
+    if (!aiEnabled) {
+
+      await bot.sendMessage(
+        chatId,
+        '📚 برای این سؤال هنوز جواب آماده‌ای ندارم.\n' +
+        'هوش مصنوعی هم فعلاً خاموشه. 🤖💤'
+      );
+
+      return;
+    }
+
+    // =========================
+    // AI
+    // =========================
+
     await bot.sendChatAction(
       chatId,
       'typing'
     );
 
-    const answer = await askAI(
-      userMessage,
-      userName,
-      userRole
-    );
+    const aiAnswer =
+      await askAI(
+        userMessage,
+        userName,
+        userRole
+      );
+
+    // =========================
+    // اگر AI جواب داد
+    // =========================
+
+    if (aiAnswer) {
+
+      await bot.sendMessage(
+        chatId,
+        aiAnswer,
+        msg.chat.type !== 'private'
+          ? {
+              reply_to_message_id:
+                msg.message_id
+            }
+          : {}
+      );
+
+      return;
+    }
+
+    // =========================
+    // اگر AI هم در دسترس نبود
+    // =========================
 
     await bot.sendMessage(
       chatId,
-      answer,
-      {
-        reply_to_message_id:
-          msg.message_id
-      }
+      '⚠️ فعلاً جواب هوش مصنوعی در دسترس نیست.\n' +
+      'لطفاً کمی بعد دوباره امتحان کن. 🤖'
     );
 
   } catch (error) {
+
     console.error(
       'Bot error:',
       error
@@ -365,7 +523,7 @@ bot.on('message', async (msg) => {
 });
 
 // =========================
-// Render Web Service
+// Render
 // =========================
 
 const port =
@@ -373,6 +531,7 @@ const port =
 
 http.createServer(
   (req, res) => {
+
     res.writeHead(200, {
       'Content-Type':
         'text/plain'
@@ -387,8 +546,10 @@ http.createServer(
 ).listen(
   port,
   () => {
+
     console.log(
       `Server listening on port ${port}`
     );
+
   }
 );
