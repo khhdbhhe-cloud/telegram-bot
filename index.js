@@ -2,12 +2,25 @@ const TelegramBot = require('node-telegram-bot-api');
 const http = require('http');
 const fs = require('fs');
 
+// =====================================================
+// تنظیمات
+// =====================================================
+
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const OWNER_ID = process.env.OWNER_ID;
 
-if (!BOT_TOKEN) throw new Error('BOT_TOKEN is not set');
-if (!OWNER_ID) throw new Error('OWNER_ID is not set');
+if (!BOT_TOKEN) {
+  throw new Error('BOT_TOKEN is not set');
+}
+
+if (!OWNER_ID) {
+  throw new Error('OWNER_ID is not set');
+}
+
+// =====================================================
+// ساخت ربات
+// =====================================================
 
 const bot = new TelegramBot(BOT_TOKEN, {
   polling: true
@@ -16,7 +29,19 @@ const bot = new TelegramBot(BOT_TOKEN, {
 let botUserId = null;
 let botUsername = null;
 
+// =====================================================
+// وضعیت ربات
+// =====================================================
+
+// خود ربات همیشه روشن است.
+// این متغیر فقط حالت خواب/بیداری پاسخ‌گویی را کنترل می‌کند.
 let botAwake = true;
+
+// حالت پاسخ‌دهی:
+//
+// true  = فقط AI
+// false = فقط بانک رایگان
+//
 let aiEnabled = true;
 
 // =====================================================
@@ -25,12 +50,12 @@ let aiEnabled = true;
 
 let answers = {};
 
-// برای جلوگیری از تکرار جواب قبلی
+// برای جلوگیری از تکرار پشت سر هم جواب قبلی
 const lastUsedAnswer = {};
 
-// -----------------------------------------------------
+// =====================================================
 // تمیز کردن کلید
-// -----------------------------------------------------
+// =====================================================
 
 function cleanKey(text) {
   return String(text)
@@ -39,9 +64,9 @@ function cleanKey(text) {
     .replace(/\s+/g, ' ');
 }
 
-// -----------------------------------------------------
+// =====================================================
 // تبدیل پاسخ به آرایه
-// -----------------------------------------------------
+// =====================================================
 
 function normalizeAnswers(value) {
   if (typeof value === 'string') {
@@ -67,9 +92,9 @@ function normalizeAnswers(value) {
   return [];
 }
 
-// -----------------------------------------------------
+// =====================================================
 // اضافه کردن پاسخ‌ها به بانک
-// -----------------------------------------------------
+// =====================================================
 
 function addAnswers(key, values, fileName) {
   const clean = cleanKey(key);
@@ -100,9 +125,9 @@ function addAnswers(key, values, fileName) {
   }
 }
 
-// -----------------------------------------------------
-// بارگذاری تمام فایل‌های answers*.json
-// -----------------------------------------------------
+// =====================================================
+// بارگذاری فایل‌های answers*.json
+// =====================================================
 
 function loadFreeAnswers() {
   answers = {};
@@ -154,9 +179,11 @@ function loadFreeAnswers() {
         let duplicateAnswers = 0;
 
         for (const [key, value] of Object.entries(data)) {
+          const clean = cleanKey(key);
+
           const before =
-            answers[cleanKey(key)]
-              ? answers[cleanKey(key)].length
+            answers[clean]
+              ? answers[clean].length
               : 0;
 
           addAnswers(
@@ -166,8 +193,8 @@ function loadFreeAnswers() {
           );
 
           const after =
-            answers[cleanKey(key)]
-              ? answers[cleanKey(key)].length
+            answers[clean]
+              ? answers[clean].length
               : 0;
 
           if (after > before) {
@@ -231,7 +258,6 @@ function chooseRandomAnswer(
     return null;
   }
 
-  // اگر فقط یک جواب وجود داشته باشد
   if (answerList.length === 1) {
     lastUsedAnswer[cleanText] =
       answerList[0];
@@ -239,7 +265,6 @@ function chooseRandomAnswer(
     return answerList[0];
   }
 
-  // جواب قبلی را تا حد امکان دوباره انتخاب نکن
   const previous =
     lastUsedAnswer[cleanText];
 
@@ -268,7 +293,7 @@ function chooseRandomAnswer(
 }
 
 // =====================================================
-// پاسخ رایگان
+// دریافت پاسخ رایگان
 // =====================================================
 
 function getFreeAnswer(text) {
@@ -289,7 +314,7 @@ function getFreeAnswer(text) {
 }
 
 // =====================================================
-// اطلاعات بات
+// اطلاعات ربات
 // =====================================================
 
 bot.getMe()
@@ -299,6 +324,18 @@ bot.getMe()
 
     console.log(
       `Bot: @${botUsername}`
+    );
+
+    console.log(
+      `Response mode: ${
+        aiEnabled
+          ? 'AI'
+          : 'FREE'
+      }`
+    );
+
+    console.log(
+      `Bot awake: ${botAwake}`
     );
 
     console.log(
@@ -313,6 +350,36 @@ bot.getMe()
   });
 
 // =====================================================
+// خطاهای Polling
+// =====================================================
+
+bot.on(
+  'polling_error',
+  (error) => {
+
+    console.error(
+      'Polling error:',
+      error.code || '',
+      error.message || error
+    );
+
+    if (
+      error.code === 'ETELEGRAM' &&
+      error.message &&
+      error.message.includes('409 Conflict')
+    ) {
+      console.error(
+        '409 Conflict: Another bot instance is using the same BOT_TOKEN with polling.'
+      );
+
+      console.error(
+        'Stop the other instance before running this bot.'
+      );
+    }
+  }
+);
+
+// =====================================================
 // هوش مصنوعی
 // =====================================================
 
@@ -321,16 +388,22 @@ async function askAI(
   userName
 ) {
   if (!OPENROUTER_API_KEY) {
+    console.error(
+      'OPENROUTER_API_KEY is not set'
+    );
+
     return null;
   }
 
   try {
+
     const prompt = `
 تو یک ربات فارسی‌زبان دوستانه هستی.
 
 نام کاربر: ${userName}
 
 کوتاه، طبیعی، محترمانه و مفید جواب بده.
+اگر کاربر لحن دوستانه یا خودمانی داشت، پاسخ هم طبیعی و خودمانی باشد.
 
 پیام کاربر:
 ${userMessage}
@@ -364,15 +437,24 @@ ${userMessage}
               role: 'user',
               content: prompt
             }
-          ]
+          ],
+
+          temperature: 0.8,
+
+          max_tokens: 500
         })
       }
     );
 
     if (!response.ok) {
+
+      const errorText =
+        await response.text();
+
       console.error(
         'OpenRouter error:',
-        response.status
+        response.status,
+        errorText
       );
 
       return null;
@@ -381,12 +463,20 @@ ${userMessage}
     const data =
       await response.json();
 
-    return (
-      data.choices?.[0]?.message?.content ||
-      null
-    );
+    const answer =
+      data.choices?.[0]?.message?.content;
+
+    if (
+      !answer ||
+      typeof answer !== 'string'
+    ) {
+      return null;
+    }
+
+    return answer.trim();
 
   } catch (error) {
+
     console.error(
       'AI error:',
       error.message
@@ -443,12 +533,14 @@ const wakeCommands = [
 const aiOnCommands = [
   'هوش مصنوعی روشن',
   'هوش مصنوعی فعال',
+  'ai روشن',
   '/ai_on'
 ];
 
 const aiOffCommands = [
   'هوش مصنوعی خاموش',
   'هوش مصنوعی غیرفعال',
+  'ai خاموش',
   '/ai_off'
 ];
 
@@ -475,6 +567,10 @@ bot.on(
 
     try {
 
+      // -------------------------------------------------
+      // بررسی اولیه
+      // -------------------------------------------------
+
       if (
         !msg.text ||
         !msg.from
@@ -494,7 +590,7 @@ bot.on(
         'کاربر';
 
       // =================================================
-      // خاموش
+      // خاموش کردن ربات
       // =================================================
 
       if (
@@ -513,15 +609,15 @@ bot.on(
         await bot.sendMessage(
           chatId,
           '🛑 چشم، مالک محترم!\n\n' +
-          'دستور شما دریافت شد و ربات وارد حالت سکوت شد. 🤫\n\n' +
-          'هر وقت گفتید «زنده شو»، دوباره برمی‌گردم. ⚡🤖'
+          'ربات وارد حالت سکوت شد. 🤫\n\n' +
+          'هر وقت گفتید «زنده شو»، دوباره فعال می‌شوم. ⚡🤖'
         );
 
         return;
       }
 
       // =================================================
-      // روشن
+      // روشن کردن ربات
       // =================================================
 
       if (
@@ -540,33 +636,7 @@ bot.on(
         await bot.sendMessage(
           chatId,
           '🟢 به روی چشم، مالک محترم!\n\n' +
-          'از حالت خواب خارج شدم و دوباره آماده‌ام. 🤖✨'
-        );
-
-        return;
-      }
-
-      // =================================================
-      // AI خاموش
-      // =================================================
-
-      if (
-        matchesCommand(
-          text,
-          aiOffCommands
-        )
-      ) {
-
-        if (!isOwner(msg)) {
-          return;
-        }
-
-        aiEnabled = false;
-
-        await bot.sendMessage(
-          chatId,
-          '🤖💤 هوش مصنوعی خاموش شد.\n\n' +
-          'از این لحظه فقط از پاسخ‌های رایگان استفاده می‌کنم. 📚'
+          'ربات دوباره فعال شد. 🤖✨'
         );
 
         return;
@@ -591,15 +661,42 @@ bot.on(
 
         await bot.sendMessage(
           chatId,
-          '🧠⚡ هوش مصنوعی دوباره فعال شد!\n\n' +
-          'اگر پاسخ آماده پیدا نشود، از AI کمک می‌گیرم. 🤖'
+          '🧠⚡ هوش مصنوعی روشن شد!\n\n' +
+          'از این لحظه فقط هوش مصنوعی پاسخ می‌دهد.\n' +
+          '📚 بانک پاسخ‌های رایگان در این حالت استفاده نمی‌شود.'
         );
 
         return;
       }
 
       // =================================================
-      // حالت خواب
+      // AI خاموش
+      // =================================================
+
+      if (
+        matchesCommand(
+          text,
+          aiOffCommands
+        )
+      ) {
+
+        if (!isOwner(msg)) {
+          return;
+        }
+
+        aiEnabled = false;
+
+        await bot.sendMessage(
+          chatId,
+          '🧠💤 هوش مصنوعی خاموش شد!\n\n' +
+          'از این لحظه فقط از بانک پاسخ‌های رایگان استفاده می‌کنم. 📚🤖'
+        );
+
+        return;
+      }
+
+      // =================================================
+      // اگر ربات خواب باشد
       // =================================================
 
       if (!botAwake) {
@@ -607,7 +704,7 @@ bot.on(
       }
 
       // =================================================
-      // گروه
+      // بررسی گروه
       // =================================================
 
       if (
@@ -638,13 +735,14 @@ bot.on(
       }
 
       // =================================================
-      // حذف منشن
+      // حذف منشن ربات
       // =================================================
 
       let userMessage =
         text;
 
       if (botUsername) {
+
         userMessage =
           userMessage
             .replace(
@@ -662,8 +760,69 @@ bot.on(
       }
 
       // =================================================
-      // اول پاسخ رایگان
+      // حالت AI
+      //
+      // اگر AI روشن باشد:
+      // فقط AI استفاده می‌شود.
+      // بانک رایگان اصلاً بررسی نمی‌شود.
       // =================================================
+
+      if (aiEnabled) {
+
+        console.log(
+          `AI mode | User: ${userName} | Message: ${userMessage}`
+        );
+
+        await bot.sendChatAction(
+          chatId,
+          'typing'
+        );
+
+        const aiAnswer =
+          await askAI(
+            userMessage,
+            userName
+          );
+
+        if (aiAnswer) {
+
+          const options =
+            msg.chat.type !== 'private'
+              ? {
+                  reply_to_message_id:
+                    msg.message_id
+                }
+              : {};
+
+          await bot.sendMessage(
+            chatId,
+            aiAnswer,
+            options
+          );
+
+          return;
+        }
+
+        await bot.sendMessage(
+          chatId,
+          '⚠️ هوش مصنوعی فعلاً در دسترس نیست.\n' +
+          'اگر خواستی، «هوش مصنوعی خاموش» را بزن تا ربات از بانک پاسخ‌های رایگان استفاده کند. 🤖'
+        );
+
+        return;
+      }
+
+      // =================================================
+      // حالت رایگان
+      //
+      // اگر AI خاموش باشد:
+      // فقط بانک رایگان استفاده می‌شود.
+      // OpenRouter اصلاً فراخوانی نمی‌شود.
+      // =================================================
+
+      console.log(
+        `FREE mode | User: ${userName} | Message: ${userMessage}`
+      );
 
       const freeAnswer =
         getFreeAnswer(
@@ -690,71 +849,38 @@ bot.on(
       }
 
       // =================================================
-      // AI خاموش
-      // =================================================
-
-      if (!aiEnabled) {
-
-        await bot.sendMessage(
-          chatId,
-          '📚 برای این سؤال هنوز جواب آماده‌ای ندارم.\n' +
-          'هوش مصنوعی هم فعلاً خاموشه. 🤖💤'
-        );
-
-        return;
-      }
-
-      // =================================================
-      // AI
-      // =================================================
-
-      await bot.sendChatAction(
-        chatId,
-        'typing'
-      );
-
-      const aiAnswer =
-        await askAI(
-          userMessage,
-          userName
-        );
-
-      if (aiAnswer) {
-
-        const options =
-          msg.chat.type !== 'private'
-            ? {
-                reply_to_message_id:
-                  msg.message_id
-              }
-            : {};
-
-        await bot.sendMessage(
-          chatId,
-          aiAnswer,
-          options
-        );
-
-        return;
-      }
-
-      // =================================================
-      // AI در دسترس نیست
+      // پاسخ پیدا نشد در حالت رایگان
       // =================================================
 
       await bot.sendMessage(
         chatId,
-        '⚠️ هوش مصنوعی فعلاً در دسترس نیست.\n' +
-        'اگر سؤال جواب آماده داشته باشد، می‌توانم بدون AI جواب بدهم. 🤖'
+        '📚 برای این پیام هنوز پاسخ آماده‌ای ندارم.\n\n' +
+        'هوش مصنوعی هم خاموش است. 🤖💤\n\n' +
+        'اگر می‌خواهی AI جواب بدهد، بگو:\n' +
+        '«هوش مصنوعی روشن»'
       );
 
     } catch (error) {
 
       console.error(
-        'Bot error:',
+        'Bot message error:',
         error
       );
 
+      try {
+
+        await bot.sendMessage(
+          msg.chat.id,
+          '⚠️ یه خطای موقت پیش اومد. دوباره امتحان کن.'
+        );
+
+      } catch (sendError) {
+
+        console.error(
+          'Error sending error message:',
+          sendError.message
+        );
+      }
     }
   }
 );
@@ -766,29 +892,75 @@ bot.on(
 const port =
   process.env.PORT || 3000;
 
-http.createServer(
-  (req, res) => {
+const server =
+  http.createServer(
+    (req, res) => {
 
-    res.writeHead(
-      200,
-      {
-        'Content-Type':
-          'text/plain'
-      }
-    );
+      res.writeHead(
+        200,
+        {
+          'Content-Type':
+            'text/plain; charset=utf-8'
+        }
+      );
 
-    res.end(
-      botAwake
-        ? 'Telegram bot is running'
-        : 'Telegram bot is sleeping'
-    );
+      res.end(
+        botAwake
+          ? (
+              aiEnabled
+                ? 'Telegram bot is running - AI mode'
+                : 'Telegram bot is running - FREE mode'
+            )
+          : 'Telegram bot is sleeping'
+      );
+    }
+  );
 
-  }
-).listen(
+server.listen(
   port,
   () => {
     console.log(
       `Server listening on port ${port}`
     );
+  }
+);
+
+// =====================================================
+// خاموش شدن تمیز
+// =====================================================
+
+process.on(
+  'SIGTERM',
+  () => {
+
+    console.log(
+      'SIGTERM received. Stopping bot...'
+    );
+
+    bot.stopPolling()
+      .catch(() => {})
+      .finally(() => {
+        server.close(() => {
+          process.exit(0);
+        });
+      });
+  }
+);
+
+process.on(
+  'SIGINT',
+  () => {
+
+    console.log(
+      'SIGINT received. Stopping bot...'
+    );
+
+    bot.stopPolling()
+      .catch(() => {})
+      .finally(() => {
+        server.close(() => {
+          process.exit(0);
+        });
+      });
   }
 );
