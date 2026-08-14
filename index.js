@@ -1,9 +1,10 @@
 const TelegramBot = require('node-telegram-bot-api');
 const http = require('http');
 const fs = require('fs');
+const path = require('path');
 
 // =====================================================
-// تنظیمات
+// SETTINGS
 // =====================================================
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -19,7 +20,7 @@ if (!OWNER_ID) {
 }
 
 // =====================================================
-// ساخت ربات
+// BOT
 // =====================================================
 
 const bot = new TelegramBot(BOT_TOKEN, {
@@ -30,53 +31,107 @@ let botUserId = null;
 let botUsername = null;
 
 // =====================================================
-// وضعیت ربات
+// STATE
 // =====================================================
 
-// خود ربات همیشه روشن است.
-// این متغیر فقط حالت خواب/بیداری پاسخ‌گویی را کنترل می‌کند.
 let botAwake = true;
 
-// حالت پاسخ‌دهی:
-//
-// true  = فقط AI
-// false = فقط بانک رایگان
-//
-let aiEnabled = true;
+// true = AI
+// false = FREE
+let aiEnabled = false;
 
 // =====================================================
-// بانک پاسخ‌های رایگان
+// FREE ANSWERS
 // =====================================================
 
 let answers = {};
+let stickerAnswers = {};
 
-// برای جلوگیری از تکرار پشت سر هم جواب قبلی
 const lastUsedAnswer = {};
+const lastUsedSticker = {};
 
 // =====================================================
-// تمیز کردن کلید
+// TEXT NORMALIZATION
 // =====================================================
 
-function cleanKey(text) {
-  return String(text)
+function normalizeText(text) {
+  return String(text || '')
     .trim()
     .toLowerCase()
+    .replace(/[ًٌٍَُِّْـ]/g, '')
+    .replace(/[يى]/g, 'ی')
+    .replace(/[ك]/g, 'ک')
+    .replace(/[ۀة]/g, 'ه')
+    .replace(/‌/g, ' ')
     .replace(/\s+/g, ' ');
 }
 
+function cleanKey(text) {
+  return normalizeText(text);
+}
+
 // =====================================================
-// تبدیل پاسخ به آرایه
+// WORDS
+// =====================================================
+
+function words(text) {
+  return normalizeText(text)
+    .split(/\s+/)
+    .filter(Boolean);
+}
+
+// =====================================================
+// SIMILARITY
+// =====================================================
+
+function similarityScore(a, b) {
+  const x = cleanKey(a);
+  const y = cleanKey(b);
+
+  if (!x || !y) {
+    return 0;
+  }
+
+  if (x === y) {
+    return 1;
+  }
+
+  if (x.includes(y) || y.includes(x)) {
+    return 0.92;
+  }
+
+  const aWords = new Set(words(x));
+  const bWords = new Set(words(y));
+
+  let common = 0;
+
+  for (const word of aWords) {
+    if (bWords.has(word)) {
+      common++;
+    }
+  }
+
+  const total = new Set([
+    ...aWords,
+    ...bWords
+  ]).size;
+
+  if (total === 0) {
+    return 0;
+  }
+
+  return common / total;
+}
+
+// =====================================================
+// ANSWER NORMALIZATION
 // =====================================================
 
 function normalizeAnswers(value) {
   if (typeof value === 'string') {
     const answer = value.trim();
 
-    if (!answer) {
-      return [];
-    }
-
-    return [answer];
+    return answer ? [answer] : [];
   }
 
   if (Array.isArray(value)) {
@@ -93,48 +148,147 @@ function normalizeAnswers(value) {
 }
 
 // =====================================================
-// اضافه کردن پاسخ‌ها به بانک
+// ADD ANSWERS
 // =====================================================
 
-function addAnswers(key, values, fileName) {
+function addAnswers(key, value, fileName) {
   const clean = cleanKey(key);
 
   if (!clean) {
-    return;
+    return 0;
   }
 
-  const normalizedValues =
-    normalizeAnswers(values);
+  const list = normalizeAnswers(value);
 
-  if (normalizedValues.length === 0) {
+  if (!list.length) {
     console.warn(
-      `Invalid answer for "${key}" in ${fileName}. Skipped.`
+      `Invalid answer "${key}" in ${fileName}`
     );
 
-    return;
+    return 0;
   }
 
   if (!answers[clean]) {
     answers[clean] = [];
   }
 
-  for (const answer of normalizedValues) {
+  let added = 0;
+
+  for (const answer of list) {
     if (!answers[clean].includes(answer)) {
       answers[clean].push(answer);
+      added++;
     }
+  }
+
+  return added;
+}
+
+// =====================================================
+// STICKER LOADER
+//
+// Example:
+//
+// {
+//   "سلام": [
+//      "CAACAgIAAxkBAA..."
+//   ]
+// }
+//
+// =====================================================
+
+function loadStickerFile(file) {
+  try {
+    const fullPath = path.join(
+      __dirname,
+      file
+    );
+
+    if (!fs.existsSync(fullPath)) {
+      return;
+    }
+
+    const data = JSON.parse(
+      fs.readFileSync(
+        fullPath,
+        'utf8'
+      )
+    );
+
+    if (
+      !data ||
+      typeof data !== 'object' ||
+      Array.isArray(data)
+    ) {
+      console.warn(
+        `${file} is not a valid object`
+      );
+
+      return;
+    }
+
+    for (const [key, value] of Object.entries(data)) {
+      const clean = cleanKey(key);
+
+      if (!clean) {
+        continue;
+      }
+
+      if (!Array.isArray(value)) {
+        continue;
+      }
+
+      const validStickers =
+        value.filter(
+          sticker =>
+            typeof sticker === 'string' &&
+            sticker.trim()
+        );
+
+      if (!validStickers.length) {
+        continue;
+      }
+
+      if (!stickerAnswers[clean]) {
+        stickerAnswers[clean] = [];
+      }
+
+      for (const sticker of validStickers) {
+        if (
+          !stickerAnswers[clean].includes(
+            sticker
+          )
+        ) {
+          stickerAnswers[clean].push(
+            sticker
+          );
+        }
+      }
+    }
+
+    console.log(
+      `Loaded stickers from ${file}`
+    );
+
+  } catch (error) {
+    console.error(
+      `Sticker file error ${file}:`,
+      error.message
+    );
   }
 }
 
 // =====================================================
-// بارگذاری فایل‌های answers*.json
+// LOAD ALL ANSWERS FILES
 // =====================================================
 
 function loadFreeAnswers() {
   answers = {};
+  stickerAnswers = {};
 
   try {
     const files = fs
-      .readdirSync('.')
+      .readdirSync(__dirname)
       .filter(
         file =>
           file.startsWith('answers') &&
@@ -142,23 +296,21 @@ function loadFreeAnswers() {
       )
       .sort();
 
-    if (files.length === 0) {
-      console.warn(
-        'No answers*.json files found.'
-      );
-
-      return;
-    }
-
     console.log(
       `Found ${files.length} answer files.`
     );
 
     for (const file of files) {
       try {
+        const fullPath =
+          path.join(
+            __dirname,
+            file
+          );
+
         const data = JSON.parse(
           fs.readFileSync(
-            `./${file}`,
+            fullPath,
             'utf8'
           )
         );
@@ -169,45 +321,27 @@ function loadFreeAnswers() {
           Array.isArray(data)
         ) {
           console.warn(
-            `${file} is not a JSON object. Skipped.`
+            `${file} skipped: invalid JSON object`
           );
 
           continue;
         }
 
-        let loadedFromFile = 0;
-        let duplicateAnswers = 0;
+        let count = 0;
 
-        for (const [key, value] of Object.entries(data)) {
-          const clean = cleanKey(key);
-
-          const before =
-            answers[clean]
-              ? answers[clean].length
-              : 0;
-
-          addAnswers(
+        for (
+          const [key, value]
+          of Object.entries(data)
+        ) {
+          count += addAnswers(
             key,
             value,
             file
           );
-
-          const after =
-            answers[clean]
-              ? answers[clean].length
-              : 0;
-
-          if (after > before) {
-            loadedFromFile += after - before;
-          }
-
-          if (after === before) {
-            duplicateAnswers++;
-          }
         }
 
         console.log(
-          `${file}: ${loadedFromFile} new answers, ${duplicateAnswers} duplicate/ignored entries`
+          `${file}: ${count} answers loaded`
         );
 
       } catch (error) {
@@ -217,6 +351,10 @@ function loadFreeAnswers() {
         );
       }
     }
+
+    loadStickerFile(
+      'sticker_responses.json'
+    );
 
     const totalKeys =
       Object.keys(answers).length;
@@ -229,13 +367,22 @@ function loadFreeAnswers() {
           0
         );
 
+    const totalStickerKeys =
+      Object.keys(
+        stickerAnswers
+      ).length;
+
     console.log(
-      `Free bank ready: ${totalKeys} unique keys, ${totalAnswers} total answers`
+      `FREE BANK: ${totalKeys} keys / ${totalAnswers} answers`
+    );
+
+    console.log(
+      `STICKERS: ${totalStickerKeys} keys`
     );
 
   } catch (error) {
     console.error(
-      'Free answers loading error:',
+      'Loading answers failed:',
       error.message
     );
   }
@@ -244,81 +391,158 @@ function loadFreeAnswers() {
 loadFreeAnswers();
 
 // =====================================================
-// انتخاب پاسخ تصادفی
+// RANDOM ANSWER
 // =====================================================
 
-function chooseRandomAnswer(
-  cleanText,
-  answerList
+function chooseRandom(
+  key,
+  list,
+  memory
 ) {
   if (
-    !Array.isArray(answerList) ||
-    answerList.length === 0
+    !Array.isArray(list) ||
+    !list.length
   ) {
     return null;
   }
 
-  if (answerList.length === 1) {
-    lastUsedAnswer[cleanText] =
-      answerList[0];
-
-    return answerList[0];
+  if (list.length === 1) {
+    memory[key] = list[0];
+    return list[0];
   }
 
-  const previous =
-    lastUsedAnswer[cleanText];
+  const previous = memory[key];
 
   let available =
-    answerList.filter(
-      answer => answer !== previous
+    list.filter(
+      item =>
+        item !== previous
     );
 
-  if (available.length === 0) {
-    available = answerList;
+  if (!available.length) {
+    available = list;
   }
 
-  const randomIndex =
-    Math.floor(
-      Math.random() *
-      available.length
-    );
-
   const selected =
-    available[randomIndex];
+    available[
+      Math.floor(
+        Math.random() *
+        available.length
+      )
+    ];
 
-  lastUsedAnswer[cleanText] =
-    selected;
+  memory[key] = selected;
 
   return selected;
 }
 
 // =====================================================
-// دریافت پاسخ رایگان
+// FIND FREE ANSWER
 // =====================================================
 
 function getFreeAnswer(text) {
-  const cleanText =
-    cleanKey(text);
+  const clean = cleanKey(text);
 
-  const answerList =
-    answers[cleanText];
-
-  if (!answerList) {
-    return null;
+  // Exact match first
+  if (answers[clean]) {
+    return chooseRandom(
+      clean,
+      answers[clean],
+      lastUsedAnswer
+    );
   }
 
-  return chooseRandomAnswer(
-    cleanText,
-    answerList
-  );
+  // Similar match
+  let bestKey = null;
+  let bestScore = 0;
+
+  for (const key of Object.keys(answers)) {
+    const score =
+      similarityScore(
+        clean,
+        key
+      );
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestKey = key;
+    }
+  }
+
+  // Don't make dangerous guesses
+  // unless similarity is reasonably high.
+  if (
+    bestKey &&
+    bestScore >= 0.55
+  ) {
+    console.log(
+      `Similar match: "${clean}" -> "${bestKey}" (${bestScore.toFixed(2)})`
+    );
+
+    return chooseRandom(
+      bestKey,
+      answers[bestKey],
+      lastUsedAnswer
+    );
+  }
+
+  return null;
 }
 
 // =====================================================
-// اطلاعات ربات
+// FIND STICKER
+// =====================================================
+
+function getSticker(text) {
+  const clean = cleanKey(text);
+
+  if (stickerAnswers[clean]) {
+    return chooseRandom(
+      clean,
+      stickerAnswers[clean],
+      lastUsedSticker
+    );
+  }
+
+  let bestKey = null;
+  let bestScore = 0;
+
+  for (
+    const key
+    of Object.keys(stickerAnswers)
+  ) {
+    const score =
+      similarityScore(
+        clean,
+        key
+      );
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestKey = key;
+    }
+  }
+
+  if (
+    bestKey &&
+    bestScore >= 0.70
+  ) {
+    return chooseRandom(
+      bestKey,
+      stickerAnswers[bestKey],
+      lastUsedSticker
+    );
+  }
+
+  return null;
+}
+
+// =====================================================
+// BOT INFO
 // =====================================================
 
 bot.getMe()
-  .then((me) => {
+  .then(me => {
     botUserId = me.id;
     botUsername = me.username;
 
@@ -327,7 +551,7 @@ bot.getMe()
     );
 
     console.log(
-      `Response mode: ${
+      `Mode: ${
         aiEnabled
           ? 'AI'
           : 'FREE'
@@ -335,14 +559,10 @@ bot.getMe()
     );
 
     console.log(
-      `Bot awake: ${botAwake}`
-    );
-
-    console.log(
-      'Telegram bot is running...'
+      'Telegram bot is running.'
     );
   })
-  .catch((error) => {
+  .catch(error => {
     console.error(
       'getMe error:',
       error.message
@@ -350,13 +570,12 @@ bot.getMe()
   });
 
 // =====================================================
-// خطاهای Polling
+// POLLING ERROR
 // =====================================================
 
 bot.on(
   'polling_error',
-  (error) => {
-
+  error => {
     console.error(
       'Polling error:',
       error.code || '',
@@ -364,23 +583,20 @@ bot.on(
     );
 
     if (
-      error.code === 'ETELEGRAM' &&
       error.message &&
-      error.message.includes('409 Conflict')
+      error.message.includes(
+        '409 Conflict'
+      )
     ) {
       console.error(
-        '409 Conflict: Another bot instance is using the same BOT_TOKEN with polling.'
-      );
-
-      console.error(
-        'Stop the other instance before running this bot.'
+        '409 Conflict: another bot instance is running with the same BOT_TOKEN.'
       );
     }
   }
 );
 
 // =====================================================
-// هوش مصنوعی
+// AI
 // =====================================================
 
 async function askAI(
@@ -396,58 +612,64 @@ async function askAI(
   }
 
   try {
-
     const prompt = `
 تو یک ربات فارسی‌زبان دوستانه هستی.
 
-نام کاربر: ${userName}
+نام کاربر:
+${userName}
 
-کوتاه، طبیعی، محترمانه و مفید جواب بده.
-اگر کاربر لحن دوستانه یا خودمانی داشت، پاسخ هم طبیعی و خودمانی باشد.
+قوانین:
+- فارسی و طبیعی جواب بده.
+- جواب کوتاه و مفید باشد.
+- اگر کاربر خودمانی حرف زد، تو هم خودمانی جواب بده.
+- از ایموجی در صورت مناسب بودن استفاده کن.
+- خودت را با ایموجی 🤖 معرفی نکن مگر لازم باشد.
+- اگر کاربر شوخی کرد، می‌توانی شوخی دوستانه داشته باشی.
+- به درخواست‌های خطرناک یا غیرقانونی کمک نکن.
 
 پیام کاربر:
 ${userMessage}
 `;
 
-    const response = await fetch(
-      'https://openrouter.ai/api/v1/chat/completions',
-      {
-        method: 'POST',
+    const response =
+      await fetch(
+        'https://openrouter.ai/api/v1/chat/completions',
+        {
+          method: 'POST',
 
-        headers: {
-          'Content-Type':
-            'application/json',
+          headers: {
+            'Content-Type':
+              'application/json',
 
-          'Authorization':
-            `Bearer ${OPENROUTER_API_KEY}`,
+            'Authorization':
+              `Bearer ${OPENROUTER_API_KEY}`,
 
-          'HTTP-Referer':
-            'https://telegram-bot-1-0mtg.onrender.com',
+            'HTTP-Referer':
+              'https://telegram-bot-1-0mtg.onrender.com',
 
-          'X-Title':
-            'Telegram Bot'
-        },
+            'X-Title':
+              'Telegram Bot'
+          },
 
-        body: JSON.stringify({
-          model:
-            'openai/gpt-4o-mini',
+          body: JSON.stringify({
+            model:
+              'openai/gpt-4o-mini',
 
-          messages: [
-            {
-              role: 'user',
-              content: prompt
-            }
-          ],
+            messages: [
+              {
+                role: 'user',
+                content: prompt
+              }
+            ],
 
-          temperature: 0.8,
+            temperature: 0.8,
 
-          max_tokens: 500
-        })
-      }
-    );
+            max_tokens: 500
+          })
+        }
+      );
 
     if (!response.ok) {
-
       const errorText =
         await response.text();
 
@@ -464,7 +686,10 @@ ${userMessage}
       await response.json();
 
     const answer =
-      data.choices?.[0]?.message?.content;
+      data
+        ?.choices?.[0]
+        ?.message
+        ?.content;
 
     if (
       !answer ||
@@ -476,7 +701,6 @@ ${userMessage}
     return answer.trim();
 
   } catch (error) {
-
     console.error(
       'AI error:',
       error.message
@@ -487,16 +711,8 @@ ${userMessage}
 }
 
 // =====================================================
-// بررسی مالک
+// OWNER
 // =====================================================
-
-function isPrivateOwner(msg) {
-  return (
-    msg.chat.type === 'private' &&
-    String(msg.from.id) ===
-      String(OWNER_ID)
-  );
-}
 
 function isOwner(msg) {
   return (
@@ -506,13 +722,12 @@ function isOwner(msg) {
 }
 
 // =====================================================
-// دستورات خواب و بیداری
+// COMMANDS
 // =====================================================
 
 const sleepCommands = [
   'خاموش شو',
   'بخواب',
-  'ساکت شو',
   'خاموش',
   '/off'
 ];
@@ -525,10 +740,6 @@ const wakeCommands = [
   'بیدار',
   '/on'
 ];
-
-// =====================================================
-// دستورات AI
-// =====================================================
 
 const aiOnCommands = [
   'هوش مصنوعی روشن',
@@ -544,10 +755,6 @@ const aiOffCommands = [
   '/ai_off'
 ];
 
-// =====================================================
-// بررسی دستور
-// =====================================================
-
 function matchesCommand(
   text,
   commands
@@ -558,18 +765,31 @@ function matchesCommand(
 }
 
 // =====================================================
-// پیام‌ها
+// SEND OPTIONS
+// =====================================================
+
+function replyOptions(msg) {
+  if (
+    msg.chat.type !== 'private'
+  ) {
+    return {
+      reply_to_message_id:
+        msg.message_id
+    };
+  }
+
+  return {};
+}
+
+// =====================================================
+// MESSAGE HANDLER
 // =====================================================
 
 bot.on(
   'message',
-  async (msg) => {
+  async msg => {
 
     try {
-
-      // -------------------------------------------------
-      // بررسی اولیه
-      // -------------------------------------------------
 
       if (
         !msg.text ||
@@ -590,7 +810,7 @@ bot.on(
         'کاربر';
 
       // =================================================
-      // خاموش کردن ربات
+      // SLEEP
       // =================================================
 
       if (
@@ -599,7 +819,6 @@ bot.on(
           sleepCommands
         )
       ) {
-
         if (!isOwner(msg)) {
           return;
         }
@@ -608,16 +827,14 @@ bot.on(
 
         await bot.sendMessage(
           chatId,
-          '🛑 چشم، مالک محترم!\n\n' +
-          'ربات وارد حالت سکوت شد. 🤫\n\n' +
-          'هر وقت گفتید «زنده شو»، دوباره فعال می‌شوم. ⚡🤖'
+          '🛑 باشه، فعلاً ساکت می‌شم. 🤫'
         );
 
         return;
       }
 
       // =================================================
-      // روشن کردن ربات
+      // WAKE
       // =================================================
 
       if (
@@ -626,7 +843,6 @@ bot.on(
           wakeCommands
         )
       ) {
-
         if (!isOwner(msg)) {
           return;
         }
@@ -635,15 +851,14 @@ bot.on(
 
         await bot.sendMessage(
           chatId,
-          '🟢 به روی چشم، مالک محترم!\n\n' +
-          'ربات دوباره فعال شد. 🤖✨'
+          '🟢 دوباره فعال شدم! ✨'
         );
 
         return;
       }
 
       // =================================================
-      // AI روشن
+      // AI ON
       // =================================================
 
       if (
@@ -652,7 +867,6 @@ bot.on(
           aiOnCommands
         )
       ) {
-
         if (!isOwner(msg)) {
           return;
         }
@@ -661,16 +875,14 @@ bot.on(
 
         await bot.sendMessage(
           chatId,
-          '🧠⚡ هوش مصنوعی روشن شد!\n\n' +
-          'از این لحظه فقط هوش مصنوعی پاسخ می‌دهد.\n' +
-          '📚 بانک پاسخ‌های رایگان در این حالت استفاده نمی‌شود.'
+          '🧠⚡ هوش مصنوعی روشن شد.'
         );
 
         return;
       }
 
       // =================================================
-      // AI خاموش
+      // AI OFF
       // =================================================
 
       if (
@@ -679,7 +891,6 @@ bot.on(
           aiOffCommands
         )
       ) {
-
         if (!isOwner(msg)) {
           return;
         }
@@ -688,15 +899,14 @@ bot.on(
 
         await bot.sendMessage(
           chatId,
-          '🧠💤 هوش مصنوعی خاموش شد!\n\n' +
-          'از این لحظه فقط از بانک پاسخ‌های رایگان استفاده می‌کنم. 📚🤖'
+          '📚 حالت رایگان فعال شد.'
         );
 
         return;
       }
 
       // =================================================
-      // اگر ربات خواب باشد
+      // SLEEPING
       // =================================================
 
       if (!botAwake) {
@@ -704,7 +914,7 @@ bot.on(
       }
 
       // =================================================
-      // بررسی گروه
+      // GROUP CHECK
       // =================================================
 
       if (
@@ -735,14 +945,12 @@ bot.on(
       }
 
       // =================================================
-      // حذف منشن ربات
+      // REMOVE MENTION
       // =================================================
 
-      let userMessage =
-        text;
+      let userMessage = text;
 
       if (botUsername) {
-
         userMessage =
           userMessage
             .replace(
@@ -759,45 +967,45 @@ bot.on(
         userMessage = 'سلام';
       }
 
+      console.log(
+        `${aiEnabled ? 'AI' : 'FREE'} | ${userName} | ${userMessage}`
+      );
+
       // =================================================
-      // حالت AI
-      //
-      // اگر AI روشن باشد:
-      // فقط AI استفاده می‌شود.
-      // بانک رایگان اصلاً بررسی نمی‌شود.
+      // FREE MODE
       // =================================================
 
-      if (aiEnabled) {
+      if (!aiEnabled) {
 
-        console.log(
-          `AI mode | User: ${userName} | Message: ${userMessage}`
-        );
-
-        await bot.sendChatAction(
-          chatId,
-          'typing'
-        );
-
-        const aiAnswer =
-          await askAI(
-            userMessage,
-            userName
+        // First try sticker
+        const sticker =
+          getSticker(
+            userMessage
           );
 
-        if (aiAnswer) {
+        if (sticker) {
 
-          const options =
-            msg.chat.type !== 'private'
-              ? {
-                  reply_to_message_id:
-                    msg.message_id
-                }
-              : {};
+          await bot.sendSticker(
+            chatId,
+            sticker,
+            replyOptions(msg)
+          );
+
+          return;
+        }
+
+        // Then text answer
+        const freeAnswer =
+          getFreeAnswer(
+            userMessage
+          );
+
+        if (freeAnswer) {
 
           await bot.sendMessage(
             chatId,
-            aiAnswer,
-            options
+            freeAnswer,
+            replyOptions(msg)
           );
 
           return;
@@ -805,88 +1013,66 @@ bot.on(
 
         await bot.sendMessage(
           chatId,
-          '⚠️ هوش مصنوعی فعلاً در دسترس نیست.\n' +
-          'اگر خواستی، «هوش مصنوعی خاموش» را بزن تا ربات از بانک پاسخ‌های رایگان استفاده کند. 🤖'
+          '📚 برای این پیام هنوز پاسخ آماده ندارم.\n\n' +
+          'اگر می‌خواهی هوش مصنوعی جواب بدهد، بگو:\n' +
+          '«هوش مصنوعی روشن»'
         );
 
         return;
       }
 
       // =================================================
-      // حالت رایگان
-      //
-      // اگر AI خاموش باشد:
-      // فقط بانک رایگان استفاده می‌شود.
-      // OpenRouter اصلاً فراخوانی نمی‌شود.
+      // AI MODE
       // =================================================
 
-      console.log(
-        `FREE mode | User: ${userName} | Message: ${userMessage}`
+      await bot.sendChatAction(
+        chatId,
+        'typing'
       );
 
-      const freeAnswer =
-        getFreeAnswer(
-          userMessage
+      const aiAnswer =
+        await askAI(
+          userMessage,
+          userName
         );
 
-      if (freeAnswer) {
-
-        const options =
-          msg.chat.type !== 'private'
-            ? {
-                reply_to_message_id:
-                  msg.message_id
-              }
-            : {};
+      if (aiAnswer) {
 
         await bot.sendMessage(
           chatId,
-          freeAnswer,
-          options
+          aiAnswer,
+          replyOptions(msg)
         );
 
         return;
       }
 
-      // =================================================
-      // پاسخ پیدا نشد در حالت رایگان
-      // =================================================
-
       await bot.sendMessage(
         chatId,
-        '📚 برای این پیام هنوز پاسخ آماده‌ای ندارم.\n\n' +
-        'هوش مصنوعی هم خاموش است. 🤖💤\n\n' +
-        'اگر می‌خواهی AI جواب بدهد، بگو:\n' +
-        '«هوش مصنوعی روشن»'
+        '⚠️ هوش مصنوعی فعلاً پاسخ نداد.\n\n' +
+        'اگر خواستی از بانک رایگان استفاده کنی، بگو:\n' +
+        '«هوش مصنوعی خاموش»'
       );
 
     } catch (error) {
 
       console.error(
-        'Bot message error:',
+        'Message error:',
         error
       );
 
       try {
-
         await bot.sendMessage(
           msg.chat.id,
           '⚠️ یه خطای موقت پیش اومد. دوباره امتحان کن.'
         );
-
-      } catch (sendError) {
-
-        console.error(
-          'Error sending error message:',
-          sendError.message
-        );
-      }
+      } catch {}
     }
   }
 );
 
 // =====================================================
-// Render Web Service
+// RENDER SERVER
 // =====================================================
 
 const port =
@@ -908,8 +1094,8 @@ const server =
         botAwake
           ? (
               aiEnabled
-                ? 'Telegram bot is running - AI mode'
-                : 'Telegram bot is running - FREE mode'
+                ? 'Telegram bot is running - AI'
+                : 'Telegram bot is running - FREE'
             )
           : 'Telegram bot is sleeping'
       );
@@ -918,49 +1104,4 @@ const server =
 
 server.listen(
   port,
-  () => {
-    console.log(
-      `Server listening on port ${port}`
-    );
-  }
-);
-
-// =====================================================
-// خاموش شدن تمیز
-// =====================================================
-
-process.on(
-  'SIGTERM',
-  () => {
-
-    console.log(
-      'SIGTERM received. Stopping bot...'
-    );
-
-    bot.stopPolling()
-      .catch(() => {})
-      .finally(() => {
-        server.close(() => {
-          process.exit(0);
-        });
-      });
-  }
-);
-
-process.on(
-  'SIGINT',
-  () => {
-
-    console.log(
-      'SIGINT received. Stopping bot...'
-    );
-
-    bot.stopPolling()
-      .catch(() => {})
-      .finally(() => {
-        server.close(() => {
-          process.exit(0);
-        });
-      });
-  }
-);
+  () 
