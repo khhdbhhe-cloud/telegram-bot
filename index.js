@@ -25,20 +25,106 @@ let aiEnabled = true;
 
 let answers = {};
 
-try {
-  answers = JSON.parse(
-    fs.readFileSync('./answers.json', 'utf8')
-  );
+function loadFreeAnswers() {
+  answers = {};
 
-  console.log(
-    `Loaded ${Object.keys(answers).length} free answers`
-  );
-} catch (error) {
-  console.error(
-    'answers.json error:',
-    error.message
-  );
+  try {
+    const files = fs
+      .readdirSync('.')
+      .filter(
+        file =>
+          file.startsWith('answers') &&
+          file.endsWith('.json')
+      )
+      .sort();
+
+    if (files.length === 0) {
+      console.warn('No answers*.json files found.');
+      return;
+    }
+
+    for (const file of files) {
+      try {
+        const data = JSON.parse(
+          fs.readFileSync(`./${file}`, 'utf8')
+        );
+
+        if (
+          !data ||
+          typeof data !== 'object' ||
+          Array.isArray(data)
+        ) {
+          console.warn(
+            `${file} is not a JSON object. Skipped.`
+          );
+          continue;
+        }
+
+        let loadedFromFile = 0;
+        let duplicatesFromFile = 0;
+
+        for (const [key, value] of Object.entries(data)) {
+          const cleanKey = key
+            .trim()
+            .toLowerCase();
+
+          if (!cleanKey) {
+            continue;
+          }
+
+          if (
+            typeof value !== 'string' ||
+            !value.trim()
+          ) {
+            console.warn(
+              `Invalid answer for "${key}" in ${file}. Skipped.`
+            );
+            continue;
+          }
+
+          if (
+            Object.prototype.hasOwnProperty.call(
+              answers,
+              cleanKey
+            )
+          ) {
+            console.warn(
+              `Duplicate free answer skipped: "${key}" from ${file}`
+            );
+
+            duplicatesFromFile++;
+            continue;
+          }
+
+          answers[cleanKey] = value;
+          loadedFromFile++;
+        }
+
+        console.log(
+          `${file}: ${loadedFromFile} loaded, ${duplicatesFromFile} duplicates skipped`
+        );
+
+      } catch (error) {
+        console.error(
+          `${file} error:`,
+          error.message
+        );
+      }
+    }
+
+    console.log(
+      `Total free answers loaded: ${Object.keys(answers).length}`
+    );
+
+  } catch (error) {
+    console.error(
+      'Free answers loading error:',
+      error.message
+    );
+  }
 }
+
+loadFreeAnswers();
 
 // =========================
 // اطلاعات بات
@@ -166,7 +252,6 @@ function isPrivateOwner(msg) {
   );
 }
 
-// در گروه فقط مالک اصلی مشخص‌شده در OWNER_ID
 function isOwner(msg) {
   return (
     String(msg.from.id) ===
