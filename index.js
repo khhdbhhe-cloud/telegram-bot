@@ -19,11 +19,90 @@ let botUsername = null;
 let botAwake = true;
 let aiEnabled = true;
 
-// =========================
+// =====================================================
 // بانک پاسخ‌های رایگان
-// =========================
+// =====================================================
 
 let answers = {};
+
+// برای جلوگیری از تکرار جواب قبلی
+const lastUsedAnswer = {};
+
+// -----------------------------------------------------
+// تمیز کردن کلید
+// -----------------------------------------------------
+
+function cleanKey(text) {
+  return String(text)
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+// -----------------------------------------------------
+// تبدیل پاسخ به آرایه
+// -----------------------------------------------------
+
+function normalizeAnswers(value) {
+  if (typeof value === 'string') {
+    const answer = value.trim();
+
+    if (!answer) {
+      return [];
+    }
+
+    return [answer];
+  }
+
+  if (Array.isArray(value)) {
+    return value
+      .filter(
+        item =>
+          typeof item === 'string' &&
+          item.trim()
+      )
+      .map(item => item.trim());
+  }
+
+  return [];
+}
+
+// -----------------------------------------------------
+// اضافه کردن پاسخ‌ها به بانک
+// -----------------------------------------------------
+
+function addAnswers(key, values, fileName) {
+  const clean = cleanKey(key);
+
+  if (!clean) {
+    return;
+  }
+
+  const normalizedValues =
+    normalizeAnswers(values);
+
+  if (normalizedValues.length === 0) {
+    console.warn(
+      `Invalid answer for "${key}" in ${fileName}. Skipped.`
+    );
+
+    return;
+  }
+
+  if (!answers[clean]) {
+    answers[clean] = [];
+  }
+
+  for (const answer of normalizedValues) {
+    if (!answers[clean].includes(answer)) {
+      answers[clean].push(answer);
+    }
+  }
+}
+
+// -----------------------------------------------------
+// بارگذاری تمام فایل‌های answers*.json
+// -----------------------------------------------------
 
 function loadFreeAnswers() {
   answers = {};
@@ -39,14 +118,24 @@ function loadFreeAnswers() {
       .sort();
 
     if (files.length === 0) {
-      console.warn('No answers*.json files found.');
+      console.warn(
+        'No answers*.json files found.'
+      );
+
       return;
     }
+
+    console.log(
+      `Found ${files.length} answer files.`
+    );
 
     for (const file of files) {
       try {
         const data = JSON.parse(
-          fs.readFileSync(`./${file}`, 'utf8')
+          fs.readFileSync(
+            `./${file}`,
+            'utf8'
+          )
         );
 
         if (
@@ -57,51 +146,41 @@ function loadFreeAnswers() {
           console.warn(
             `${file} is not a JSON object. Skipped.`
           );
+
           continue;
         }
 
         let loadedFromFile = 0;
-        let duplicatesFromFile = 0;
+        let duplicateAnswers = 0;
 
         for (const [key, value] of Object.entries(data)) {
-          const cleanKey = key
-            .trim()
-            .toLowerCase();
+          const before =
+            answers[cleanKey(key)]
+              ? answers[cleanKey(key)].length
+              : 0;
 
-          if (!cleanKey) {
-            continue;
+          addAnswers(
+            key,
+            value,
+            file
+          );
+
+          const after =
+            answers[cleanKey(key)]
+              ? answers[cleanKey(key)].length
+              : 0;
+
+          if (after > before) {
+            loadedFromFile += after - before;
           }
 
-          if (
-            typeof value !== 'string' ||
-            !value.trim()
-          ) {
-            console.warn(
-              `Invalid answer for "${key}" in ${file}. Skipped.`
-            );
-            continue;
+          if (after === before) {
+            duplicateAnswers++;
           }
-
-          if (
-            Object.prototype.hasOwnProperty.call(
-              answers,
-              cleanKey
-            )
-          ) {
-            console.warn(
-              `Duplicate free answer skipped: "${key}" from ${file}`
-            );
-
-            duplicatesFromFile++;
-            continue;
-          }
-
-          answers[cleanKey] = value;
-          loadedFromFile++;
         }
 
         console.log(
-          `${file}: ${loadedFromFile} loaded, ${duplicatesFromFile} duplicates skipped`
+          `${file}: ${loadedFromFile} new answers, ${duplicateAnswers} duplicate/ignored entries`
         );
 
       } catch (error) {
@@ -112,8 +191,19 @@ function loadFreeAnswers() {
       }
     }
 
+    const totalKeys =
+      Object.keys(answers).length;
+
+    const totalAnswers =
+      Object.values(answers)
+        .reduce(
+          (sum, list) =>
+            sum + list.length,
+          0
+        );
+
     console.log(
-      `Total free answers loaded: ${Object.keys(answers).length}`
+      `Free bank ready: ${totalKeys} unique keys, ${totalAnswers} total answers`
     );
 
   } catch (error) {
@@ -126,17 +216,94 @@ function loadFreeAnswers() {
 
 loadFreeAnswers();
 
-// =========================
+// =====================================================
+// انتخاب پاسخ تصادفی
+// =====================================================
+
+function chooseRandomAnswer(
+  cleanText,
+  answerList
+) {
+  if (
+    !Array.isArray(answerList) ||
+    answerList.length === 0
+  ) {
+    return null;
+  }
+
+  // اگر فقط یک جواب وجود داشته باشد
+  if (answerList.length === 1) {
+    lastUsedAnswer[cleanText] =
+      answerList[0];
+
+    return answerList[0];
+  }
+
+  // جواب قبلی را تا حد امکان دوباره انتخاب نکن
+  const previous =
+    lastUsedAnswer[cleanText];
+
+  let available =
+    answerList.filter(
+      answer => answer !== previous
+    );
+
+  if (available.length === 0) {
+    available = answerList;
+  }
+
+  const randomIndex =
+    Math.floor(
+      Math.random() *
+      available.length
+    );
+
+  const selected =
+    available[randomIndex];
+
+  lastUsedAnswer[cleanText] =
+    selected;
+
+  return selected;
+}
+
+// =====================================================
+// پاسخ رایگان
+// =====================================================
+
+function getFreeAnswer(text) {
+  const cleanText =
+    cleanKey(text);
+
+  const answerList =
+    answers[cleanText];
+
+  if (!answerList) {
+    return null;
+  }
+
+  return chooseRandomAnswer(
+    cleanText,
+    answerList
+  );
+}
+
+// =====================================================
 // اطلاعات بات
-// =========================
+// =====================================================
 
 bot.getMe()
   .then((me) => {
     botUserId = me.id;
     botUsername = me.username;
 
-    console.log(`Bot: @${botUsername}`);
-    console.log('Telegram bot is running...');
+    console.log(
+      `Bot: @${botUsername}`
+    );
+
+    console.log(
+      'Telegram bot is running...'
+    );
   })
   .catch((error) => {
     console.error(
@@ -145,21 +312,9 @@ bot.getMe()
     );
   });
 
-// =========================
-// پاسخ رایگان
-// =========================
-
-function getFreeAnswer(text) {
-  const cleanText = text
-    .trim()
-    .toLowerCase();
-
-  return answers[cleanText] || null;
-}
-
-// =========================
+// =====================================================
 // هوش مصنوعی
-// =========================
+// =====================================================
 
 async function askAI(
   userMessage,
@@ -175,7 +330,7 @@ async function askAI(
 
 نام کاربر: ${userName}
 
-کوتاه، طبیعی و مفید جواب بده.
+کوتاه، طبیعی، محترمانه و مفید جواب بده.
 
 پیام کاربر:
 ${userMessage}
@@ -201,7 +356,8 @@ ${userMessage}
         },
 
         body: JSON.stringify({
-          model: 'openai/gpt-4o-mini',
+          model:
+            'openai/gpt-4o-mini',
 
           messages: [
             {
@@ -240,9 +396,9 @@ ${userMessage}
   }
 }
 
-// =========================
+// =====================================================
 // بررسی مالک
-// =========================
+// =====================================================
 
 function isPrivateOwner(msg) {
   return (
@@ -259,9 +415,9 @@ function isOwner(msg) {
   );
 }
 
-// =========================
-// دستورات
-// =========================
+// =====================================================
+// دستورات خواب و بیداری
+// =====================================================
 
 const sleepCommands = [
   'خاموش شو',
@@ -280,6 +436,10 @@ const wakeCommands = [
   '/on'
 ];
 
+// =====================================================
+// دستورات AI
+// =====================================================
+
 const aiOnCommands = [
   'هوش مصنوعی روشن',
   'هوش مصنوعی فعال',
@@ -292,18 +452,22 @@ const aiOffCommands = [
   '/ai_off'
 ];
 
+// =====================================================
+// بررسی دستور
+// =====================================================
+
 function matchesCommand(
   text,
   commands
 ) {
   return commands.includes(
-    text.trim().toLowerCase()
+    cleanKey(text)
   );
 }
 
-// =========================
+// =====================================================
 // پیام‌ها
-// =========================
+// =====================================================
 
 bot.on(
   'message',
@@ -311,7 +475,10 @@ bot.on(
 
     try {
 
-      if (!msg.text || !msg.from) {
+      if (
+        !msg.text ||
+        !msg.from
+      ) {
         return;
       }
 
@@ -326,9 +493,9 @@ bot.on(
         msg.from.username ||
         'کاربر';
 
-      // =========================
+      // =================================================
       // خاموش
-      // =========================
+      // =================================================
 
       if (
         matchesCommand(
@@ -353,9 +520,9 @@ bot.on(
         return;
       }
 
-      // =========================
+      // =================================================
       // روشن
-      // =========================
+      // =================================================
 
       if (
         matchesCommand(
@@ -379,9 +546,9 @@ bot.on(
         return;
       }
 
-      // =========================
+      // =================================================
       // AI خاموش
-      // =========================
+      // =================================================
 
       if (
         matchesCommand(
@@ -405,9 +572,9 @@ bot.on(
         return;
       }
 
-      // =========================
+      // =================================================
       // AI روشن
-      // =========================
+      // =================================================
 
       if (
         matchesCommand(
@@ -431,19 +598,21 @@ bot.on(
         return;
       }
 
-      // =========================
+      // =================================================
       // حالت خواب
-      // =========================
+      // =================================================
 
       if (!botAwake) {
         return;
       }
 
-      // =========================
+      // =================================================
       // گروه
-      // =========================
+      // =================================================
 
-      if (msg.chat.type !== 'private') {
+      if (
+        msg.chat.type !== 'private'
+      ) {
 
         const mentioned =
           botUsername &&
@@ -468,11 +637,12 @@ bot.on(
         }
       }
 
-      // =========================
+      // =================================================
       // حذف منشن
-      // =========================
+      // =================================================
 
-      let userMessage = text;
+      let userMessage =
+        text;
 
       if (botUsername) {
         userMessage =
@@ -491,12 +661,14 @@ bot.on(
         userMessage = 'سلام';
       }
 
-      // =========================
+      // =================================================
       // اول پاسخ رایگان
-      // =========================
+      // =================================================
 
       const freeAnswer =
-        getFreeAnswer(userMessage);
+        getFreeAnswer(
+          userMessage
+        );
 
       if (freeAnswer) {
 
@@ -517,9 +689,9 @@ bot.on(
         return;
       }
 
-      // =========================
+      // =================================================
       // AI خاموش
-      // =========================
+      // =================================================
 
       if (!aiEnabled) {
 
@@ -532,9 +704,9 @@ bot.on(
         return;
       }
 
-      // =========================
+      // =================================================
       // AI
-      // =========================
+      // =================================================
 
       await bot.sendChatAction(
         chatId,
@@ -566,9 +738,9 @@ bot.on(
         return;
       }
 
-      // =========================
+      // =================================================
       // AI در دسترس نیست
-      // =========================
+      // =================================================
 
       await bot.sendMessage(
         chatId,
@@ -587,9 +759,9 @@ bot.on(
   }
 );
 
-// =========================
+// =====================================================
 // Render Web Service
-// =========================
+// =====================================================
 
 const port =
   process.env.PORT || 3000;
@@ -597,10 +769,13 @@ const port =
 http.createServer(
   (req, res) => {
 
-    res.writeHead(200, {
-      'Content-Type':
-        'text/plain'
-    });
+    res.writeHead(
+      200,
+      {
+        'Content-Type':
+          'text/plain'
+      }
+    );
 
     res.end(
       botAwake
