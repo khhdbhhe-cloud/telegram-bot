@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 // =====================================================
-// SETTINGS
+// CONFIG
 // =====================================================
 
 const BOT_TOKEN = process.env.BOT_TOKEN;
@@ -30,10 +30,6 @@ const bot = new TelegramBot(BOT_TOKEN, {
 let botUserId = null;
 let botUsername = null;
 
-// =====================================================
-// STATE
-// =====================================================
-
 let botAwake = true;
 
 // true = AI
@@ -41,14 +37,13 @@ let botAwake = true;
 let aiEnabled = false;
 
 // =====================================================
-// FREE ANSWERS
+// FREE DATABASE
 // =====================================================
 
 let answers = {};
 let stickerAnswers = {};
 
 const lastUsedAnswer = {};
-const lastUsedSticker = {};
 
 // =====================================================
 // TEXT NORMALIZATION
@@ -58,551 +53,364 @@ function normalizeText(text) {
   return String(text || '')
     .trim()
     .toLowerCase()
-    .replace(/[ًٌٍَُِّْـ]/g, '')
     .replace(/[يى]/g, 'ی')
     .replace(/[ك]/g, 'ک')
     .replace(/[ۀة]/g, 'ه')
-    .replace(/‌/g, ' ')
-    .replace(/\s+/g, ' ');
-}
-
-function cleanKey(text) {
-  return normalizeText(text);
-}
-
-// =====================================================
-// WORDS
-// =====================================================
-
-function words(text) {
-  return normalizeText(text)
-    .split(/\s+/)
-    .filter(Boolean);
+    .replace(/ؤ/g, 'و')
+    .replace(/إأآ/g, 'ا')
+    .replace(/[‌]/g, '')
+    .replace(/[!?؟،,.؛:()[\]{}"'`~@#$%^&*_+=|\\/<>-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 // =====================================================
-// SIMILARITY
-// =====================================================
-
-function similarityScore(a, b) {
-  const x = cleanKey(a);
-  const y = cleanKey(b);
-
-  if (!x || !y) {
-    return 0;
-  }
-
-  if (x === y) {
-    return 1;
-  }
-
-  if (x.includes(y) || y.includes(x)) {
-    return 0.92;
-  }
-
-  const aWords = new Set(words(x));
-  const bWords = new Set(words(y));
-
-  let common = 0;
-
-  for (const word of aWords) {
-    if (bWords.has(word)) {
-      common++;
-    }
-  }
-
-  const total = new Set([
-    ...aWords,
-    ...bWords
-  ]).size;
-
-  if (total === 0) {
-    return 0;
-  }
-
-  return common / total;
-}
-
-// =====================================================
-// ANSWER NORMALIZATION
+// ANSWER NORMALIZER
 // =====================================================
 
 function normalizeAnswers(value) {
   if (typeof value === 'string') {
-    const answer = value.trim();
-
-    return answer ? [answer] : [];
+    const text = value.trim();
+    return text ? [text] : [];
   }
 
   if (Array.isArray(value)) {
     return value
-      .filter(
-        item =>
-          typeof item === 'string' &&
-          item.trim()
-      )
-      .map(item => item.trim());
+      .filter(v => typeof v === 'string' && v.trim())
+      .map(v => v.trim());
   }
 
   return [];
 }
 
 // =====================================================
-// ADD ANSWERS
+// ADD ANSWER
 // =====================================================
 
-function addAnswers(key, value, fileName) {
-  const clean = cleanKey(key);
+function addAnswer(key, value) {
+  const cleanKey = normalizeText(key);
 
-  if (!clean) {
-    return 0;
+  if (!cleanKey) {
+    return;
   }
 
   const list = normalizeAnswers(value);
 
   if (!list.length) {
-    console.warn(
-      `Invalid answer "${key}" in ${fileName}`
-    );
-
-    return 0;
+    return;
   }
 
-  if (!answers[clean]) {
-    answers[clean] = [];
+  if (!answers[cleanKey]) {
+    answers[cleanKey] = [];
   }
-
-  let added = 0;
 
   for (const answer of list) {
-    if (!answers[clean].includes(answer)) {
-      answers[clean].push(answer);
-      added++;
+    if (!answers[cleanKey].includes(answer)) {
+      answers[cleanKey].push(answer);
     }
-  }
-
-  return added;
-}
-
-// =====================================================
-// STICKER LOADER
-//
-// Example:
-//
-// {
-//   "سلام": [
-//      "CAACAgIAAxkBAA..."
-//   ]
-// }
-//
-// =====================================================
-
-function loadStickerFile(file) {
-  try {
-    const fullPath = path.join(
-      __dirname,
-      file
-    );
-
-    if (!fs.existsSync(fullPath)) {
-      return;
-    }
-
-    const data = JSON.parse(
-      fs.readFileSync(
-        fullPath,
-        'utf8'
-      )
-    );
-
-    if (
-      !data ||
-      typeof data !== 'object' ||
-      Array.isArray(data)
-    ) {
-      console.warn(
-        `${file} is not a valid object`
-      );
-
-      return;
-    }
-
-    for (const [key, value] of Object.entries(data)) {
-      const clean = cleanKey(key);
-
-      if (!clean) {
-        continue;
-      }
-
-      if (!Array.isArray(value)) {
-        continue;
-      }
-
-      const validStickers =
-        value.filter(
-          sticker =>
-            typeof sticker === 'string' &&
-            sticker.trim()
-        );
-
-      if (!validStickers.length) {
-        continue;
-      }
-
-      if (!stickerAnswers[clean]) {
-        stickerAnswers[clean] = [];
-      }
-
-      for (const sticker of validStickers) {
-        if (
-          !stickerAnswers[clean].includes(
-            sticker
-          )
-        ) {
-          stickerAnswers[clean].push(
-            sticker
-          );
-        }
-      }
-    }
-
-    console.log(
-      `Loaded stickers from ${file}`
-    );
-
-  } catch (error) {
-    console.error(
-      `Sticker file error ${file}:`,
-      error.message
-    );
   }
 }
 
 // =====================================================
-// LOAD ALL ANSWERS FILES
+// ADD STICKER
 // =====================================================
 
-function loadFreeAnswers() {
+function addSticker(key, value) {
+  const cleanKey = normalizeText(key);
+
+  if (!cleanKey) {
+    return;
+  }
+
+  const list = Array.isArray(value)
+    ? value.filter(v => typeof v === 'string' && v.trim())
+    : typeof value === 'string'
+      ? [value]
+      : [];
+
+  if (!list.length) {
+    return;
+  }
+
+  if (!stickerAnswers[cleanKey]) {
+    stickerAnswers[cleanKey] = [];
+  }
+
+  for (const sticker of list) {
+    if (!stickerAnswers[cleanKey].includes(sticker)) {
+      stickerAnswers[cleanKey].push(sticker);
+    }
+  }
+}
+
+// =====================================================
+// LOAD JSON FILES
+// =====================================================
+
+function loadDatabase() {
   answers = {};
   stickerAnswers = {};
 
-  try {
-    const files = fs
-      .readdirSync(__dirname)
-      .filter(
-        file =>
-          file.startsWith('answers') &&
-          file.endsWith('.json')
-      )
-      .sort();
+  const files = fs
+    .readdirSync('.')
+    .filter(file =>
+      file.startsWith('answers') &&
+      file.endsWith('.json')
+    )
+    .sort();
 
-    console.log(
-      `Found ${files.length} answer files.`
-    );
+  console.log(`Found ${files.length} answer files.`);
 
-    for (const file of files) {
-      try {
-        const fullPath =
-          path.join(
-            __dirname,
-            file
-          );
+  for (const file of files) {
+    try {
+      const fullPath = path.join('.', file);
 
-        const data = JSON.parse(
-          fs.readFileSync(
-            fullPath,
-            'utf8'
-          )
-        );
+      const data = JSON.parse(
+        fs.readFileSync(fullPath, 'utf8')
+      );
 
-        if (
-          !data ||
-          typeof data !== 'object' ||
-          Array.isArray(data)
-        ) {
-          console.warn(
-            `${file} skipped: invalid JSON object`
-          );
-
-          continue;
-        }
-
-        let count = 0;
-
-        for (
-          const [key, value]
-          of Object.entries(data)
-        ) {
-          count += addAnswers(
-            key,
-            value,
-            file
-          );
-        }
-
-        console.log(
-          `${file}: ${count} answers loaded`
-        );
-
-      } catch (error) {
-        console.error(
-          `${file} error:`,
-          error.message
-        );
+      if (
+        !data ||
+        typeof data !== 'object' ||
+        Array.isArray(data)
+      ) {
+        console.warn(`${file}: invalid JSON structure`);
+        continue;
       }
+
+      // Special sticker file
+      if (
+        file.includes('sticker')
+      ) {
+        for (const [key, value] of Object.entries(data)) {
+          addSticker(key, value);
+        }
+
+        console.log(`${file}: sticker database loaded`);
+        continue;
+      }
+
+      // Normal answer files
+      for (const [key, value] of Object.entries(data)) {
+        addAnswer(key, value);
+      }
+
+      console.log(`${file}: loaded`);
+
+    } catch (error) {
+      console.error(
+        `${file}: ${error.message}`
+      );
     }
-
-    loadStickerFile(
-      'sticker_responses.json'
-    );
-
-    const totalKeys =
-      Object.keys(answers).length;
-
-    const totalAnswers =
-      Object.values(answers)
-        .reduce(
-          (sum, list) =>
-            sum + list.length,
-          0
-        );
-
-    const totalStickerKeys =
-      Object.keys(
-        stickerAnswers
-      ).length;
-
-    console.log(
-      `FREE BANK: ${totalKeys} keys / ${totalAnswers} answers`
-    );
-
-    console.log(
-      `STICKERS: ${totalStickerKeys} keys`
-    );
-
-  } catch (error) {
-    console.error(
-      'Loading answers failed:',
-      error.message
-    );
   }
+
+  const totalKeys = Object.keys(answers).length;
+
+  const totalAnswers = Object.values(answers)
+    .reduce((sum, list) => sum + list.length, 0);
+
+  const totalStickerKeys =
+    Object.keys(stickerAnswers).length;
+
+  console.log(
+    `FREE database: ${totalKeys} keys, ${totalAnswers} answers`
+  );
+
+  console.log(
+    `Sticker database: ${totalStickerKeys} keys`
+  );
 }
 
-loadFreeAnswers();
+loadDatabase();
 
 // =====================================================
 // RANDOM ANSWER
 // =====================================================
 
-function chooseRandom(
-  key,
-  list,
-  memory
-) {
-  if (
-    !Array.isArray(list) ||
-    !list.length
-  ) {
+function randomItem(list) {
+  if (!Array.isArray(list) || !list.length) {
     return null;
   }
 
-  if (list.length === 1) {
-    memory[key] = list[0];
-    return list[0];
-  }
-
-  const previous = memory[key];
-
-  let available =
-    list.filter(
-      item =>
-        item !== previous
-    );
-
-  if (!available.length) {
-    available = list;
-  }
-
-  const selected =
-    available[
-      Math.floor(
-        Math.random() *
-        available.length
-      )
-    ];
-
-  memory[key] = selected;
-
-  return selected;
+  return list[
+    Math.floor(Math.random() * list.length)
+  ];
 }
 
 // =====================================================
-// FIND FREE ANSWER
+// SMART ANSWER SEARCH
 // =====================================================
 
-function getFreeAnswer(text) {
-  const clean = cleanKey(text);
+function findFreeAnswer(text) {
+  const cleanText = normalizeText(text);
 
-  // Exact match first
-  if (answers[clean]) {
-    return chooseRandom(
-      clean,
-      answers[clean],
-      lastUsedAnswer
-    );
+  if (!cleanText) {
+    return null;
   }
 
-  // Similar match
-  let bestKey = null;
-  let bestScore = 0;
-
-  for (const key of Object.keys(answers)) {
-    const score =
-      similarityScore(
-        clean,
-        key
-      );
-
-    if (score > bestScore) {
-      bestScore = score;
-      bestKey = key;
-    }
+  // 1. Exact match
+  if (answers[cleanText]) {
+    return randomItem(answers[cleanText]);
   }
 
-  // Don't make dangerous guesses
-  // unless similarity is reasonably high.
-  if (
-    bestKey &&
-    bestScore >= 0.55
-  ) {
-    console.log(
-      `Similar match: "${clean}" -> "${bestKey}" (${bestScore.toFixed(2)})`
-    );
+  // 2. Search if database key exists inside message
+  const keys = Object.keys(answers);
 
-    return chooseRandom(
-      bestKey,
-      answers[bestKey],
-      lastUsedAnswer
-    );
-  }
-
-  return null;
-}
-
-// =====================================================
-// FIND STICKER
-// =====================================================
-
-function getSticker(text) {
-  const clean = cleanKey(text);
-
-  if (stickerAnswers[clean]) {
-    return chooseRandom(
-      clean,
-      stickerAnswers[clean],
-      lastUsedSticker
-    );
-  }
-
-  let bestKey = null;
-  let bestScore = 0;
-
-  for (
-    const key
-    of Object.keys(stickerAnswers)
-  ) {
-    const score =
-      similarityScore(
-        clean,
-        key
-      );
-
-    if (score > bestScore) {
-      bestScore = score;
-      bestKey = key;
-    }
-  }
-
-  if (
-    bestKey &&
-    bestScore >= 0.70
-  ) {
-    return chooseRandom(
-      bestKey,
-      stickerAnswers[bestKey],
-      lastUsedSticker
-    );
-  }
-
-  return null;
-}
-
-// =====================================================
-// BOT INFO
-// =====================================================
-
-bot.getMe()
-  .then(me => {
-    botUserId = me.id;
-    botUsername = me.username;
-
-    console.log(
-      `Bot: @${botUsername}`
-    );
-
-    console.log(
-      `Mode: ${
-        aiEnabled
-          ? 'AI'
-          : 'FREE'
-      }`
-    );
-
-    console.log(
-      'Telegram bot is running.'
-    );
-  })
-  .catch(error => {
-    console.error(
-      'getMe error:',
-      error.message
+  const matchingKeys = keys.filter(key => {
+    return (
+      cleanText.includes(key) ||
+      key.includes(cleanText)
     );
   });
 
-// =====================================================
-// POLLING ERROR
-// =====================================================
-
-bot.on(
-  'polling_error',
-  error => {
-    console.error(
-      'Polling error:',
-      error.code || '',
-      error.message || error
+  if (matchingKeys.length) {
+    matchingKeys.sort(
+      (a, b) => b.length - a.length
     );
 
-    if (
-      error.message &&
-      error.message.includes(
-        '409 Conflict'
-      )
-    ) {
-      console.error(
-        '409 Conflict: another bot instance is running with the same BOT_TOKEN.'
-      );
+    const bestKey = matchingKeys[0];
+
+    return randomItem(
+      answers[bestKey]
+    );
+  }
+
+  // 3. Word overlap
+  const userWords = cleanText.split(' ');
+
+  let bestKey = null;
+  let bestScore = 0;
+
+  for (const key of keys) {
+    const keyWords = key.split(' ');
+
+    let score = 0;
+
+    for (const word of userWords) {
+      if (
+        word.length >= 2 &&
+        keyWords.includes(word)
+      ) {
+        score++;
+      }
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestKey = key;
     }
   }
-);
+
+  if (bestKey && bestScore > 0) {
+    return randomItem(
+      answers[bestKey]
+    );
+  }
+
+  return null;
+}
+
+// =====================================================
+// STICKER SEARCH
+// =====================================================
+
+function findSticker(text) {
+  const cleanText = normalizeText(text);
+
+  if (!cleanText) {
+    return null;
+  }
+
+  if (stickerAnswers[cleanText]) {
+    return randomItem(
+      stickerAnswers[cleanText]
+    );
+  }
+
+  const keys = Object.keys(stickerAnswers);
+
+  const match = keys
+    .filter(key =>
+      cleanText.includes(key) ||
+      key.includes(cleanText)
+    )
+    .sort(
+      (a, b) => b.length - a.length
+    )[0];
+
+  if (!match) {
+    return null;
+  }
+
+  return randomItem(
+    stickerAnswers[match]
+  );
+}
+
+// =====================================================
+// COMMAND MATCH
+// =====================================================
+
+function matchesCommand(text, commands) {
+  const clean = normalizeText(text);
+
+  return commands.some(
+    command =>
+      normalizeText(command) === clean
+  );
+}
+
+// =====================================================
+// OWNER
+// =====================================================
+
+function isOwner(msg) {
+  return String(msg.from.id) === String(OWNER_ID);
+}
+
+// =====================================================
+// SLEEP / WAKE
+// =====================================================
+
+const sleepCommands = [
+  'خاموش شو',
+  'بخواب',
+  'خاموش',
+  '/off'
+];
+
+const wakeCommands = [
+  'زنده شو',
+  'بیدار شو',
+  'فعال شو',
+  'روشن شو',
+  'بیدار',
+  '/on'
+];
+
+// =====================================================
+// AI COMMANDS
+// =====================================================
+
+const aiOnCommands = [
+  'هوش مصنوعی روشن',
+  'هوش مصنوعی فعال',
+  'ai روشن',
+  '/ai_on'
+];
+
+const aiOffCommands = [
+  'هوش مصنوعی خاموش',
+  'هوش مصنوعی غیرفعال',
+  'ai خاموش',
+  '/ai_off'
+];
 
 // =====================================================
 // AI
 // =====================================================
 
-async function askAI(
-  userMessage,
-  userName
-) {
+async function askAI(userMessage, userName) {
   if (!OPENROUTER_API_KEY) {
     console.error(
       'OPENROUTER_API_KEY is not set'
@@ -618,65 +426,45 @@ async function askAI(
 نام کاربر:
 ${userName}
 
-قوانین:
-- فارسی و طبیعی جواب بده.
-- جواب کوتاه و مفید باشد.
-- اگر کاربر خودمانی حرف زد، تو هم خودمانی جواب بده.
-- از ایموجی در صورت مناسب بودن استفاده کن.
-- خودت را با ایموجی 🤖 معرفی نکن مگر لازم باشد.
-- اگر کاربر شوخی کرد، می‌توانی شوخی دوستانه داشته باشی.
-- به درخواست‌های خطرناک یا غیرقانونی کمک نکن.
-
 پیام کاربر:
 ${userMessage}
+
+کوتاه، طبیعی، دوستانه و مفید جواب بده.
 `;
 
-    const response =
-      await fetch(
-        'https://openrouter.ai/api/v1/chat/completions',
-        {
-          method: 'POST',
+    const response = await fetch(
+      'https://openrouter.ai/api/v1/chat/completions',
+      {
+        method: 'POST',
 
-          headers: {
-            'Content-Type':
-              'application/json',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+          'HTTP-Referer': 'https://telegram-bot-1-0mtg.onrender.com',
+          'X-Title': 'Telegram Bot'
+        },
 
-            'Authorization':
-              `Bearer ${OPENROUTER_API_KEY}`,
+        body: JSON.stringify({
+          model: 'openai/gpt-4o-mini',
 
-            'HTTP-Referer':
-              'https://telegram-bot-1-0mtg.onrender.com',
+          messages: [
+            {
+              role: 'user',
+              content: prompt
+            }
+          ],
 
-            'X-Title':
-              'Telegram Bot'
-          },
-
-          body: JSON.stringify({
-            model:
-              'openai/gpt-4o-mini',
-
-            messages: [
-              {
-                role: 'user',
-                content: prompt
-              }
-            ],
-
-            temperature: 0.8,
-
-            max_tokens: 500
-          })
-        }
-      );
+          temperature: 0.8,
+          max_tokens: 500
+        })
+      }
+    );
 
     if (!response.ok) {
-      const errorText =
-        await response.text();
-
       console.error(
-        'OpenRouter error:',
+        'OpenRouter:',
         response.status,
-        errorText
+        await response.text()
       );
 
       return null;
@@ -686,10 +474,7 @@ ${userMessage}
       await response.json();
 
     const answer =
-      data
-        ?.choices?.[0]
-        ?.message
-        ?.content;
+      data.choices?.[0]?.message?.content;
 
     if (
       !answer ||
@@ -711,75 +496,47 @@ ${userMessage}
 }
 
 // =====================================================
-// OWNER
+// BOT INFO
 // =====================================================
 
-function isOwner(msg) {
-  return (
-    String(msg.from.id) ===
-    String(OWNER_ID)
-  );
-}
+bot.getMe()
+  .then(me => {
+    botUserId = me.id;
+    botUsername = me.username;
+
+    console.log(
+      `Bot: @${botUsername}`
+    );
+
+    console.log(
+      `Mode: ${aiEnabled ? 'AI' : 'FREE'}`
+    );
+
+    console.log(
+      `Awake: ${botAwake}`
+    );
+  })
+  .catch(error => {
+    console.error(
+      'getMe error:',
+      error.message
+    );
+  });
 
 // =====================================================
-// COMMANDS
+// POLLING ERROR
 // =====================================================
 
-const sleepCommands = [
-  'خاموش شو',
-  'بخواب',
-  'خاموش',
-  '/off'
-];
-
-const wakeCommands = [
-  'زنده شو',
-  'بیدار شو',
-  'فعال شو',
-  'روشن شو',
-  'بیدار',
-  '/on'
-];
-
-const aiOnCommands = [
-  'هوش مصنوعی روشن',
-  'هوش مصنوعی فعال',
-  'ai روشن',
-  '/ai_on'
-];
-
-const aiOffCommands = [
-  'هوش مصنوعی خاموش',
-  'هوش مصنوعی غیرفعال',
-  'ai خاموش',
-  '/ai_off'
-];
-
-function matchesCommand(
-  text,
-  commands
-) {
-  return commands.includes(
-    cleanKey(text)
-  );
-}
-
-// =====================================================
-// SEND OPTIONS
-// =====================================================
-
-function replyOptions(msg) {
-  if (
-    msg.chat.type !== 'private'
-  ) {
-    return {
-      reply_to_message_id:
-        msg.message_id
-    };
+bot.on(
+  'polling_error',
+  error => {
+    console.error(
+      'Polling error:',
+      error.code || '',
+      error.message || error
+    );
   }
-
-  return {};
-}
+);
 
 // =====================================================
 // MESSAGE HANDLER
@@ -819,6 +576,7 @@ bot.on(
           sleepCommands
         )
       ) {
+
         if (!isOwner(msg)) {
           return;
         }
@@ -827,7 +585,7 @@ bot.on(
 
         await bot.sendMessage(
           chatId,
-          '🛑 باشه، فعلاً ساکت می‌شم. 🤫'
+          '🛑 ربات وارد حالت سکوت شد.'
         );
 
         return;
@@ -843,6 +601,7 @@ bot.on(
           wakeCommands
         )
       ) {
+
         if (!isOwner(msg)) {
           return;
         }
@@ -851,7 +610,7 @@ bot.on(
 
         await bot.sendMessage(
           chatId,
-          '🟢 دوباره فعال شدم! ✨'
+          '🟢 ربات دوباره فعال شد! ✨'
         );
 
         return;
@@ -867,6 +626,7 @@ bot.on(
           aiOnCommands
         )
       ) {
+
         if (!isOwner(msg)) {
           return;
         }
@@ -875,7 +635,7 @@ bot.on(
 
         await bot.sendMessage(
           chatId,
-          '🧠⚡ هوش مصنوعی روشن شد.'
+          '🧠 هوش مصنوعی روشن شد.'
         );
 
         return;
@@ -891,6 +651,7 @@ bot.on(
           aiOffCommands
         )
       ) {
+
         if (!isOwner(msg)) {
           return;
         }
@@ -914,7 +675,7 @@ bot.on(
       }
 
       // =================================================
-      // GROUP CHECK
+      // GROUP
       // =================================================
 
       if (
@@ -945,7 +706,7 @@ bot.on(
       }
 
       // =================================================
-      // REMOVE MENTION
+      // REMOVE BOT MENTION
       // =================================================
 
       let userMessage = text;
@@ -972,86 +733,99 @@ bot.on(
       );
 
       // =================================================
-      // FREE MODE
-      // =================================================
-
-      if (!aiEnabled) {
-
-        // First try sticker
-        const sticker =
-          getSticker(
-            userMessage
-          );
-
-        if (sticker) {
-
-          await bot.sendSticker(
-            chatId,
-            sticker,
-            replyOptions(msg)
-          );
-
-          return;
-        }
-
-        // Then text answer
-        const freeAnswer =
-          getFreeAnswer(
-            userMessage
-          );
-
-        if (freeAnswer) {
-
-          await bot.sendMessage(
-            chatId,
-            freeAnswer,
-            replyOptions(msg)
-          );
-
-          return;
-        }
-
-        await bot.sendMessage(
-          chatId,
-          '📚 برای این پیام هنوز پاسخ آماده ندارم.\n\n' +
-          'اگر می‌خواهی هوش مصنوعی جواب بدهد، بگو:\n' +
-          '«هوش مصنوعی روشن»'
-        );
-
-        return;
-      }
-
-      // =================================================
       // AI MODE
       // =================================================
 
-      await bot.sendChatAction(
-        chatId,
-        'typing'
-      );
+      if (aiEnabled) {
 
-      const aiAnswer =
-        await askAI(
-          userMessage,
-          userName
+        await bot.sendChatAction(
+          chatId,
+          'typing'
         );
 
-      if (aiAnswer) {
+        const aiAnswer =
+          await askAI(
+            userMessage,
+            userName
+          );
+
+        if (aiAnswer) {
+
+          await bot.sendMessage(
+            chatId,
+            aiAnswer,
+            msg.chat.type !== 'private'
+              ? {
+                  reply_to_message_id:
+                    msg.message_id
+                }
+              : {}
+          );
+
+          return;
+        }
 
         await bot.sendMessage(
           chatId,
-          aiAnswer,
-          replyOptions(msg)
+          '⚠️ هوش مصنوعی فعلاً در دسترس نیست.'
         );
 
         return;
       }
 
+      // =================================================
+      // FREE MODE
+      // =================================================
+
+      const freeAnswer =
+        findFreeAnswer(
+          userMessage
+        );
+
+      if (freeAnswer) {
+
+        await bot.sendMessage(
+          chatId,
+          freeAnswer,
+          msg.chat.type !== 'private'
+            ? {
+                reply_to_message_id:
+                  msg.message_id
+              }
+            : {}
+        );
+
+        return;
+      }
+
+      // =================================================
+      // STICKER
+      // =================================================
+
+      const sticker =
+        findSticker(
+          userMessage
+        );
+
+      if (sticker) {
+
+        await bot.sendSticker(
+          chatId,
+          sticker
+        );
+
+        return;
+      }
+
+      // =================================================
+      // NOT FOUND
+      // =================================================
+
       await bot.sendMessage(
         chatId,
-        '⚠️ هوش مصنوعی فعلاً پاسخ نداد.\n\n' +
-        'اگر خواستی از بانک رایگان استفاده کنی، بگو:\n' +
-        '«هوش مصنوعی خاموش»'
+        '📚 برای این پیام هنوز پاسخ آماده‌ای ندارم.\n\n' +
+        'اگر می‌خواهی AI جواب بدهد، بگو:\n' +
+        '«هوش مصنوعی روشن»'
       );
 
     } catch (error) {
@@ -1094,8 +868,8 @@ const server =
         botAwake
           ? (
               aiEnabled
-                ? 'Telegram bot is running - AI'
-                : 'Telegram bot is running - FREE'
+                ? 'Telegram bot is running - AI mode'
+                : 'Telegram bot is running - FREE mode'
             )
           : 'Telegram bot is sleeping'
       );
@@ -1104,4 +878,40 @@ const server =
 
 server.listen(
   port,
-  () 
+  () => {
+    console.log(
+      `Server listening on port ${port}`
+    );
+  }
+);
+
+// =====================================================
+// SHUTDOWN
+// =====================================================
+
+function shutdown() {
+
+  console.log(
+    'Stopping bot...'
+  );
+
+  bot.stopPolling()
+    .catch(() => {})
+    .finally(() => {
+
+      server.close(() => {
+        process.exit(0);
+      });
+
+    });
+}
+
+process.on(
+  'SIGTERM',
+  shutdown
+);
+
+process.on(
+  'SIGINT',
+  shutdown
+);
