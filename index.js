@@ -57,7 +57,7 @@ function normalizeText(text) {
     .replace(/[ك]/g, 'ک')
     .replace(/[ۀة]/g, 'ه')
     .replace(/ؤ/g, 'و')
-    .replace(/إأآ/g, 'ا')
+    .replace(/[إأآ]/g, 'ا')
     .replace(/[‌]/g, '')
     .replace(/[!?؟،,.؛:()[\]{}"'`~@#$%^&*_+=|\\/<>-]/g, ' ')
     .replace(/\s+/g, ' ')
@@ -178,10 +178,7 @@ function loadDatabase() {
         continue;
       }
 
-      // Special sticker file
-      if (
-        file.includes('sticker')
-      ) {
+      if (file.includes('sticker')) {
         for (const [key, value] of Object.entries(data)) {
           addSticker(key, value);
         }
@@ -190,7 +187,6 @@ function loadDatabase() {
         continue;
       }
 
-      // Normal answer files
       for (const [key, value] of Object.entries(data)) {
         addAnswer(key, value);
       }
@@ -248,12 +244,10 @@ function findFreeAnswer(text) {
     return null;
   }
 
-  // 1. Exact match
   if (answers[cleanText]) {
     return randomItem(answers[cleanText]);
   }
 
-  // 2. Search if database key exists inside message
   const keys = Object.keys(answers);
 
   const matchingKeys = keys.filter(key => {
@@ -275,7 +269,6 @@ function findFreeAnswer(text) {
     );
   }
 
-  // 3. Word overlap
   const userWords = cleanText.split(' ');
 
   let bestKey = null;
@@ -536,9 +529,7 @@ bot.on(
       error.message || error
     );
   }
-);
-
-// =====================================================
+);// =====================================================
 // MESSAGE HANDLER
 // =====================================================
 
@@ -728,6 +719,75 @@ bot.on(
         userMessage = 'سلام';
       }
 
+      // =================================================
+      // SAY / بگو
+      // =================================================
+      // مثال:
+      // بگو سلام
+      // بگو کجایی
+      // بگو گم شو 😂
+      //
+      // ربات دقیقاً متن بعد از «بگو» را می‌فرستد.
+      // =================================================
+
+      const sayMatch =
+        userMessage.match(
+          /^بگو\s+([\s\S]+)$/i
+        );
+
+      if (sayMatch) {
+
+        const sayText =
+          sayMatch[1].trim();
+
+        if (sayText) {
+
+          await bot.sendMessage(
+            chatId,
+            sayText,
+            msg.chat.type !== 'private'
+              ? {
+                  reply_to_message_id:
+                    msg.message_id
+                }
+              : {}
+          );
+
+          return;
+        }
+      }
+
+      // =================================================
+      // ALSO SUPPORT "بگو" WITHOUT SPACE
+      // =================================================
+
+      const sayMatch2 =
+        userMessage.match(
+          /^بگو([\s\S]+)$/i
+        );
+
+      if (sayMatch2) {
+
+        const sayText =
+          sayMatch2[1].trim();
+
+        if (sayText) {
+
+          await bot.sendMessage(
+            chatId,
+            sayText,
+            msg.chat.type !== 'private'
+              ? {
+                  reply_to_message_id:
+                    msg.message_id
+                }
+              : {}
+          );
+
+          return;
+        }
+      }
+
       console.log(
         `${aiEnabled ? 'AI' : 'FREE'} | ${userName} | ${userMessage}`
       );
@@ -836,10 +896,12 @@ bot.on(
       );
 
       try {
+
         await bot.sendMessage(
           msg.chat.id,
           '⚠️ یه خطای موقت پیش اومد. دوباره امتحان کن.'
         );
+
       } catch {}
     }
   }
